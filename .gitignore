@@ -1,0 +1,7 @@
+# make 构建产物（Makefile 中 OBJDIR=obj、BINDIR=bin）
+obj/
+bin/
+
+# 系统杂项
+Thumbs.db
+.DS_Store
