@@ -72,7 +72,7 @@
 ### 3.3 启动过程的补充说明
 
 本实验涉及的启动过程依次为：QEMU 启动虚拟机后，CPU 先从复位地址 0x1000 执行引导代码，然后进入 OpenSBI 固件；OpenSBI 完成必要的初始化，再把执行权交给位于 0x80200000 的内核。内核获得控制权后首先执行 entry.S 中的入口代码，建立内核栈，再跳转至 kern_init。本部分围绕入口操作及其 GDB 验证过程展开。
-本机使用原 Makefile 启动时，OpenSBI 显示下一阶段地址为 0，没有进入内核。将 qemu、debug 目标的装载参数改为 -kernel $(UCOREIMG) 后，下一阶段地址显示为 0x80200000，内核输出启动提示。本次镜像是由 QEMU 装入内存的；OpenSBI 负责初始化并移交控制权。
+使用仓库原有代码和 Makefile 执行 make qemu，内核能够正常启动，并输出 (THU.CST) os is loading ...。原 Makefile 使用 -device loader,file=$(UCOREIMG),addr=0x80200000，由 QEMU 将内核镜像装入指定内存地址；OpenSBI 完成初始化后将控制权交给内核。
 
 ---
 
@@ -132,7 +132,7 @@ x/2gx 0x1018 显示 0x1018 处存放 0x80000000，0x1020 处存放 0x87000000。
 
 #### 2. 对练习问题的回答
 RISC-V 虚拟 CPU 启动后首先执行的代码位于 0x1000。通过反汇编和单步验证，该处的前六条指令主要用于准备 hart 编号等启动参数，从内存取出下一阶段入口地址，并通过 jr t0 跳到 0x80000000。该地址也是本次 OpenSBI 输出的固件基址。固件完成初始化后，按照 QEMU/OpenSBI 显示的下一阶段地址和模式，把控制权交给 S 模式内核的 0x80200000；GDB 在 kern_entry 命中断点，验证了这一交接结果。因此，本次启动的关键地址依次是 0x1000 → 0x80000000 → 0x80200000。
-本次镜像通过 QEMU 的 -kernel 参数装入内存。调试验证了固件向内核的控制权移交的过程。
+上述调试记录验证了固件向内核移交控制权的过程。仓库原 Makefile 使用 -device loader 装载内核镜像，可以正常启动内核，无需修改原有启动配置。
 
 ### 功能模块：构建系统
 
@@ -219,15 +219,17 @@ make: Nothing to be done for 'TARGETS'.
 
 **测试截图：**
 
-在 code 目录执行 make qemu，QEMU 启动后先输出 OpenSBI 信息，随后内核打印 “(THU.CST) os is loading ...” 并进入死循环，说明内核被正确编译、装入并开始执行。
+在 code 目录使用原版 Makefile 执行 make qemu，QEMU 启动后先输出 OpenSBI 信息，随后内核打印 (THU.CST) os is loading ... 并进入无限循环，说明内核被正确编译、装入并开始执行。
 
 ![图 0：make qemu 运行结果](./images/make_qemu.png)
 
-![图 1：复位地址处的指令](image.png)
-![图 2：复位代码跳转至 OpenSBI](image-1.png)
-![图 3：内核入口及栈设置前的状态](image-2.png)
-![图 4：入口指令执行后的 PC 与栈指针](image-4.png)
-![图 5：固件移交控制权与内核输出](image-3.png)
+![图 1：复位地址处的指令](./images/image.png)
+
+![图 2：复位代码跳转至 OpenSBI](./images/image-1.png)
+
+![图 3：内核入口及栈设置前的状态](./images/image-2.png)
+
+![图 4：入口指令执行后的 PC 与栈指针](./images/image-4.png)
 
 
 ---
