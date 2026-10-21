@@ -77,6 +77,25 @@
 -->
 
 ### 功能模块二：[物理内存分配功能]
+
+#### 模块功能描述
+
+**需要实现/修改的函数：**
+
+```c
+// 列出本模块涉及的所有函数签名
+void example_function(void);
+int another_function(int arg);
+```
+
+**功能说明：**
+
+[简要描述该模块的功能，包括：
+- 该模块在整个系统中的作用
+- 需要处理的主要场景
+- 与其他模块的交互关系]
+
+
 #### 任务一：理解first-fit 连续物理内存分配算法（思考题）
 **负责人：** [2413497-姚嘉乐]
 
@@ -96,77 +115,217 @@ First-Fit 分配器将空闲物理页组织成按地址递增排列的空闲块�
 
 2. **修复尾部插入后重复操作节点的问题。** 阅读代码发现，原有的算法实现存在BUG，`default_init_memmap()` 和 `default_free_pages()` 的尾插分支在执行 `list_add(le, &(base->page_link))` 后没有退出循环。下一轮会访问刚插入的节点，并再次把同一节点插到自身后面，破坏其 `prev` 链接，并进一步影响后续前后块的合并。可以在尾插成功后补充 `break`，保证每个空闲块只插入一次，维持双向链表结构的正确性。
 
-任务二：
-#### 模块功能描述
-
-**需要实现/修改的函数：**
-
-```c
-// 列出本模块涉及的所有函数签名
-void example_function(void);
-int another_function(int arg);
-```
-
-**功能说明：**
-
-[简要描述该模块的功能，包括：
-- 该模块在整个系统中的作用
-- 需要处理的主要场景
-- 与其他模块的交互关系]
+任务二：实现 Best-Fit 连续物理内存分配算法（设计提示词借助 AI 完成）
 
 #### 最终提示词
 
 以下是经过迭代优化后，最终成功实现该功能的提示词：
 
 ````markdown
+[PROMPT]
 
-[按照提示词模板，给出具体的提示词]
+**任务**：
+为当前内核实现并接入完整的 Best-Fit 连续物理页分配模块，使内核能够从所有满足请求的空闲块中，选择大小最小的一块分配连续物理页，并支持页面回收与相邻空闲块合并。
 
-````
+目标文件：
+1. ucore-team/code/kern/mm/best_fit_pmm.c
+   补全 Best-Fit 的内部状态、管理函数及 best_fit_pmm_manager 注册结构。
+2. ucore-team/code/kern/mm/pmm.c
+   仅修改 init_pmm_manager() 中的分配器选择，使内核使用 best_fit_pmm_manager。
 
-#### 实现迭代过程
+**操作要求**：
+- 必须修改项目中的实际文件，完成整个模块及其接入。
+- 不允许修改 basic_check() 和 best_fit_check() 两个现有测试函数的全部内容。
+- 允许替换 Best-Fit 文件中的临时编译脚手架，并添加模块内部的静态辅助函数、宏和变量。
+- 保留现有代码，只在标记位置补全，不要删除既有逻辑。
 
-本模块的实现经历了 [N] 次迭代，过程如下：
+**输出要求**：
+- 使用下述 [RELY]、[GUARANTEE] 和 [SPECIFICATION] 完成真实文件修改，以工程真实代码为准，不要引入无关功能。
+- 注意保持程序代码的可读性，合理使用注释。
 
----
+[RELY]
 
-##### 第一次迭代
+请先读取两个目标文件，以及以下参考文件中的真实定义：
 
-如果设计的prompt生成代码后出现问题：
+- ucore-team/code/kern/mm/pmm.h
+- ucore-team/code/kern/mm/memlayout.h
+- ucore-team/code/kern/mm/default_pmm.c
+- ucore-team/code/kern/mm/best_fit_pmm.h
+- ucore-team/code/libs/list.h
 
-**遇到的问题：**
-- 问题1：问题描述、错误信息和原因分析
-- 问题2：问题描述、错误信息和原因分析
+关键数据结构如下，使用工程中已有定义，不要重复定义：
 
-**问题解决策略：**
-- 针对问题1：[说明如何修改提示词]
-- 针对问题2：[说明如何修改提示词]
+```c
+struct Page {
+    int ref;
+    uint64_t flags;
+    unsigned int property;
+    list_entry_t page_link;
+};
 
-如果没有问题：
+struct pmm_manager {
+    const char *name;
+    void (*init)(void);
+    void (*init_memmap)(struct Page *base, size_t n);
+    struct Page *(*alloc_pages)(size_t n);
+    void (*free_pages)(struct Page *base, size_t n);
+    size_t (*nr_free_pages)(void);
+    void (*check)(void);
+};
+```
+
+[GUARANTEE]
+
+必须实现以下模块内部接口：
+
+```c
+static void best_fit_init(void);
+static void best_fit_init_memmap(struct Page *base, size_t n);
+static struct Page *best_fit_alloc_pages(size_t n);
+static void best_fit_free_pages(struct Page *base, size_t n);
+static size_t best_fit_nr_free_pages(void);
+```
+
+必须在 Best-Fit 模块中定义具有外部链接的注册对象：
+
+```c
+const struct pmm_manager best_fit_pmm_manager;
+```
+
+注册对象的五个管理回调必须对应上述接口，check 回调必须绑定已有且未经修改的 best_fit_check()。
+
+必须修改现有接口：
+
+```c
+static void init_pmm_manager(void);
+```
+
+修改目标是选择并初始化 best_fit_pmm_manager，保留原有的管理器名称输出和初始化调用。可以添加 static 辅助函数、模块内部宏及必要的内部状态，不改变公共接口和 Page 的结构定义。
+
+[SPECIFICATION]
+
+## best_fit_init
+
+**Pre-Condition**：
+- 内核处于物理内存管理器初始化阶段，尚未向本模块登记可用页面。
+
+**Post-Condition**：
+- 空闲链表处于合法的空链表状态。
+- 空闲页计数为零。
+- 模块可以接收后续的空闲区域登记。
+
+## best_fit_init_memmap
+
+**Pre-Condition**：
+- 模块已经初始化。
+- n > 0，base 指向描述符数组中的合法连续区间。
+- 该区间内的页面均处于保留状态，且未被登记为空闲区域。
+
+**Post-Condition**：
+- 恰好新增 n 个可分配页面，空闲页计数增加 n。
+- 新登记页面不再处于保留状态，引用计数为零。
+- 页面被组织为符合模块状态约束的空闲块。
+
+  **Case 1：没有相邻空闲块**
+  - 新区域作为独立空闲块参与管理，其他空闲区域保持不变。
+
+  **Case 2：存在相邻空闲块**
+  - 新区域与实际连续的前后空闲块合并，形成完整的连续空闲区域。
+
+**Requirements**：
+- 新区域位于链表头部、中间或尾部时，均应正确维护双向链接。
+- 每个空闲块节点只能挂接一次。
+- 对 n == 0 的非法调用，沿用参考实现的断言检查。
+
+## best_fit_alloc_pages
+
+**Pre-Condition**：
+- 模块已经初始化，n > 0。
+- 当前链表中的空闲块具有合法的描述符和块长度。
+
+**Post-Condition**：
+- 成功时返回恰好 n 个连续物理页的首页描述符。
+- 失败时返回 NULL，链表、标志和空闲页计数均保持调用前的状态。
+- 所选块的页数是所有页数不少于 n 的空闲块中的最小值。
+- 若有多个同样大小的最佳候选块，选择物理地址最低的一块。
+- 分配区域从所选块的起始位置开始，空闲页计数减少 n。
+- 返回区域不再属于空闲块，不具有空闲块首页标志；
+- 页面引用计数保持为零，也不被标记为保留页。
+
+  **Case 1：所选块恰好包含 n 页**
+  - 整个块被分配，不留下该块对应的空闲节点。
+
+  **Case 2：所选块大于 n 页**
+  - 未分配的剩余部分继续作为连续空闲块参与管理，
+    其首页、长度、标志和链表位置均正确。
+
+  **Case 3：不存在足够大的连续空闲块**
+  - 返回 NULL，包括总空闲页数不足，以及总量足够但分散在多个小块中的情况。
+
+## best_fit_free_pages
+
+**Pre-Condition**：
+- 模块已经初始化，n > 0。
+- base 指向合法的连续已分配页面区间。
+- 待释放页面不属于保留区，也不属于当前空闲区域。
+
+**Post-Condition**：
+- 恰好归还 n 个页面，空闲页计数增加 n。
+- 归还页面的引用计数为零。
+- 释放后的空闲区域满足模块状态约束。
+
+  **Case 1：前后均无相邻空闲块**
+  - 释放区域成为独立空闲块。
+
+  **Case 2：仅前侧或仅后侧存在相邻空闲块**
+  - 释放区域与该相邻块合并，首页和块长度准确。
+
+  **Case 3：前后均存在相邻空闲块**
+  - 三段区域合并为一个连续空闲块，只保留最终块的首页节点与标志。
+
+## best_fit_nr_free_pages
+
+**Pre-Condition**：
+- 模块已经初始化。
+
+**Post-Condition**：
+- 返回当前维护的空闲页计数。
+
+## best_fit_pmm_manager 注册对象
+
+**Pre-Condition**：
+- 各管理接口已经实现，现有 best_fit_check() 保持原样。
+
+**Post-Condition**：
+- name 为 "best_fit_pmm_manager"。
+- 五个管理回调准确绑定本模块对应接口。
+- check 绑定现有 best_fit_check()。
+- 对象与头文件中的 extern 声明一致，可以被通用层引用。
+
+## init_pmm_manager
+
+**Pre-Condition**：
+- 由 pmm_init() 在登记空闲页面之前调用。
+
+**Post-Condition**：
+- pmm_manager 指向 best_fit_pmm_manager。
+- 输出当前管理器名称，并通过其 init 回调完成初始化。
+- 后续空闲页登记、分配、释放及检查均进入 Best-Fit 模块。
+
+```
+
 
 **最终结果：**
 
-经过 [N] 次迭代，该模块最终：
+经过 [0] 次迭代，Best-Fit 算法最终：
 - ✅ 编译通过
 - ✅ 所有相关测试通过
 - ✅ 功能符合预期
 
-**关键改进点总结（如有）：**
-1. [改进点1：例如，在 [RELY] 中补充了完整的系统调用号定义]
-2. [改进点2：例如，在 [SPECIFICATION] 中明确了异常处理的边界条件]
-3. [改进点3：例如，增加了对用户指针合法性检查的要求]
 
----
+#### 任务三
 
-##### 第二次迭代（如有）
-
-[按照和第一次迭代相同的格式]
-
----
-
-##### 第三次迭代（如有）
-
-[按照和第一次迭代相同的格式]
+#### 扩展任务Challenge：任意大小的内存单元 slub 分配算法（设计提示词借助 AI 完成）
 
 ---
 
