@@ -83,18 +83,42 @@
 **需要实现/修改的函数：**
 
 ```c
-// 列出本模块涉及的所有函数签名
-void example_function(void);
-int another_function(int arg);
+// Best-Fit：初始化、登记空闲页、分配、释放和统计
+static void best_fit_init(void);
+static void best_fit_init_memmap(struct Page *base, size_t n);
+static struct Page *best_fit_alloc_pages(size_t n);
+static void best_fit_free_pages(struct Page *base, size_t n);
+static size_t best_fit_nr_free_pages(void);
+
+// Best-Fit：空闲块插入与相邻块合并
+static void best_fit_insert_block(struct Page *base, size_t n);
+
+// SLUB：对象级内存分配接口
+void slub_init(void);
+void *slub_alloc(size_t size);
+void slub_free(void *ptr);
+
+// SLUB：页面地址转换与新 slab 建立
+static struct slub_slab *slub_page_address(struct Page *page);
+static struct slub_slab *slub_new_slab(struct slub_cache *cache);
+
+// SLUB：独立测试入口
+void slub_check(void);
+
+// 修改：选择物理页分配器并接入 SLUB 初始化与测试
+static void init_pmm_manager(void);
+int kern_init(void);
 ```
+
+此外，需要定义 `best_fit_pmm_manager` 注册结构。First-Fit 的相关函数以及 `basic_check()`、`best_fit_check()` 为框架已有内容，分别用于阅读分析和固定测试，不作为新增实现。
 
 **功能说明：**
 
-[简要描述该模块的功能，包括：
-- 该模块在整个系统中的作用
-- 需要处理的主要场景
-- 与其他模块的交互关系]
+1. **在系统中的作用。** 本模块负责管理初始化后交付的空闲物理页，为内核提供连续物理页分配、释放和空闲页统计功能。通过阅读 First-Fit 理解空闲块的组织与管理，再实现 Best-Fit 选块策略，并在页分配器之上建立 SLUB 对象分配层，使内核既能按页申请连续内存，也能按字节申请不同大小的对象。
 
+2. **需要处理的主要场景。** 页级分配需要完成空闲区域登记、最佳适配选块、剩余块拆分、页面回收及相邻空闲块合并，并在找不到足够大的连续块时正确返回失败。对象级分配将小对象按大小类别组织，通过 slab 内部的空闲对象链表完成分配和复用；较大对象直接申请连续物理页。释放时需要正确识别对象归属，回收空 slab 或大对象占用的全部页面，同时处理零长度、空指针、内存不足和长度溢出等边界情况。
+
+3. **与其他模块的交互关系。** 物理内存初始化模块通过 `page_init()` 确定可用区域，再经当前 `pmm_manager` 的接口登记空闲页。上层统一调用 `alloc_pages()`、`free_pages()` 和 `nr_free_pages()`，由注册的分配器处理，当前选择 Best-Fit。SLUB 使用这些页接口取得和归还物理页，再向调用者提供 `slub_alloc()` 和 `slub_free()`。内核在 `pmm_init()` 完成后初始化 SLUB，并调用独立测试检查对象分配、数据隔离、复用和页面回收。
 
 ### 模块二任务一：理解first-fit 连续物理内存分配算法（思考题）
 **负责人：** [2413497-姚嘉乐]
@@ -118,9 +142,6 @@ First-Fit 分配器将空闲物理页组织成按地址递增排列的空闲块�
 ### 模块二任务二：实现 Best-Fit 连续物理内存分配算法（设计提示词借助 AI 完成）
 
 #### 最终提示词
-
-以下是经过迭代优化后，最终成功实现该功能的提示词：
-
 ````markdown
 [PROMPT]
 
@@ -655,7 +676,7 @@ int kern_init(void);
 ![测试结果截图](./images/test_result.png)
 ### 模块二任务二 Bestfit算法测试通过截图（make grade）
 ![Bestfit算法make grade测试通过截图](./images/Bestfit算法替换后的测试截图.png)
-### 模块二扩展任务SLUB分配算法测试通过截图
+### 模块二扩展任务 SLUB分配算法测试通过截图
 ![扩展任务，SLUB分配算法测试通过截图](./images/SLUB分配算法测试通过截图.png)
 ---
 
