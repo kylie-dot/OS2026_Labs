@@ -1,6 +1,8 @@
 #include <console.h>
 #include <defs.h>
 #include <pmm.h>
+#include <slub.h>
+#include <slub_test.h>
 #include <stdio.h>
 #include <string.h>
 #include <dtb.h>
@@ -38,6 +40,10 @@ int kern_init(void) {
 
     // grade_backtrace();
     pmm_init();  // init physical memory management
+    // lab2 2413497：物理页管理就绪后初始化 SLUB 对象分配层。
+    slub_init();
+    // lab2 2413497：初始化完成后执行独立 SLUB 测试。
+    slub_check();
 
     /* do nothing */
     while (1)
