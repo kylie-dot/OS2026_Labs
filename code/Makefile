@@ -17,6 +17,14 @@ ifndef SPIKE
 SPIKE := spike
 endif
 
+# lab2 2411333: `make BUDDY=1` 时定义 USE_BUDDY_PMM，
+# pmm.c 的 init_pmm_manager 据此选择伙伴系统分配器；默认构建不受影响。
+# 注意：CFLAGS 为简单展开变量，此开关必须位于其引用 $(DEFS) 之前。
+# 切换 BUDDY 开关前后需先 make clean，避免沿用旧的目标文件。
+ifeq ($(BUDDY),1)
+DEFS	+= -DUSE_BUDDY_PMM
+endif
+
 # eliminate default suffix rules
 .SUFFIXES: .c .S .h
 
