@@ -6,7 +6,7 @@
 |------|------|
 | **实验名称** | Lab2：物理内存管理与分页机制 |
 | **小组成员** | 2411333-吴卓彦、2413497-姚嘉乐、2410690-王睿瑜 |
-| **完成日期** |  |
+| **完成日期** | 2026-10-23 |
 
 
 
@@ -14,9 +14,9 @@
 
 | 成员 | 负责的练习/模块 |
 |------|----------------|
-| 2413497-姚嘉乐（A） | First-Fit 理解、Best-Fit 实现与注册，SLUB 选做任务 |
-| 2410690-王睿瑜（B） | 分页机制、entry.S 解读、QEMU 源码与 TLB 调试、内存容量思考题，最终报告整合 |
-| 2411333-吴卓彦（C） | page_init()、Buddy System、构建与启动文件调查 |
+| 2413497-姚嘉乐 | First-Fit 理解、Best-Fit 实现与注册，SLUB 选做任务 |
+| 2410690-王睿瑜 | 分页机制、entry.S 解读、QEMU 源码与 TLB 调试、内存容量思考题|
+| 2411333-吴卓彦| page_init()、Buddy System、构建与启动文件调查，最终报告整合 |
 
 
 
@@ -37,9 +37,9 @@
 
 | 成员 | AI 编程工具 | 底层模型 | 备注 |
 |------|------------|---------|------|
-| 王睿瑜（B） | | | |
-| 姚嘉乐（A） | | | |
-| 吴卓彦（C） | | | |
+| 王睿瑜 |vscode codex插件 | gpt6.1sol| -|
+| 姚嘉乐 |vscode codex插件 |gpt6.1sol | -|
+| 吴卓彦 |vscode codex插件 |glm-5.3 | -|
 
 ### 编译与调试环境
 
@@ -125,7 +125,7 @@ pmm_init()
 
 #### 任务一：实现物理内存探测与页描述符初始化功能
 
-**负责人：**
+**负责人：** 2411333-吴卓彦
 
 ##### 模块功能描述
 
@@ -135,10 +135,122 @@ pmm_init()
 static void page_init(void);  // kern/mm/pmm.c
 ```
 
+**功能说明：**
+
+本函数建立物理页的管理信息，并把可用页交给当前分配器。启动页表已经由 `entry.S` 建立并写入 `satp`，因此这里处理物理内存初始化，不重新建立页表。输入来自设备树解析结果、链接符号 `end` 及框架常量；输出体现为全局变量和页描述符状态更新，不需要显式函数参数或返回值。它连接设备树探测与分配器初始化，为后续 Best-Fit、Buddy 和 SLUB 提供可用物理页。
+
+##### 核心处理流程
+
+1. **读取设备树结果。** `kern_init()` 先清零 BSS，再调用 `dtb_init()`。`page_init()` 经 `get_memory_base()`、`get_memory_size()` 取得 RAM 范围；本实现对 base 或 size 为 0 的情况调用 `panic()`，停止继续初始化。
+2. **设置地址换算与管理范围。** 令 `va_pa_offset = KERNBASE - KERNEL_BEGIN_PADDR`，得到内核虚实映射偏移；令 `npage = PPN(min(base + size, PHYSICAL_MEMORY_END))`，限制管理上界。这里 `npage` 是结束位置对应的绝对物理页号上界，实际描述符数量是 `npage - nbase`，不能把 `npage` 当作 RAM 总页数。
+3. **安排描述符数组。** `pages = ROUNDUP(end, PGSIZE)`，使数组位于内核镜像之后并按页对齐。每个 `struct Page` 记录一张物理页的引用计数、标志和链表信息。先对全部 `npage-nbase` 个描述符设置 `PG_reserved`，再只将真正可用的部分交接给管理器。
+4. **计算空闲区。** `pages + (npage - nbase)` 是描述符数组末端的虚拟地址，经 `PADDR()` 换成物理地址，再向上按页对齐得到 `freemem`。这样固件、内核、描述符数组和不足一页的边界空间不会被作为空闲页交出。
+5. **登记完整空闲页。** 当 `PPN(freemem) < npage` 时，可用页数为 `npage - PPN(freemem)`；仅在数量大于 0 时调用 `init_memmap(pa2page(freemem), nfree)`。第一个参数是空闲首页的描述符指针，第二个参数才是连续页数。随后输出实际探测与计算结果。
+
+平台 RAM 为 128 MiB，对应 32768 张 4 KiB 页；`nbase=0x80000`、`npage=0x88000`。RISC-V 64 位构建中 `struct Page` 为 40 字节，因此描述符数组占 1310720 字节，即 1.25 MiB。数组本身也占物理内存，不能再次分配给调用者。
+
+##### Spec 与最终提示词
+
+**Spec 要点：** 内核及描述符数组不进入空闲区；页号上界、描述符数量与地址转换分别计算；零内存信息终止初始化；没有完整空闲页时不调用 `init_memmap()`。地址与页数由实际布局推导，不照抄参考输出。
+
+最终提示词如下。
+
+原始提示词和更正经过仍保留在 `prompt.md` 练习 1。
+
+````text
+[PROMPT]
+实现 RISC-V uCore Lab2 的 page_init()，根据设备树报告的物理内存范围，
+建立页描述符数组，排除已占用区域并登记可分配的完整物理页。
+只修改 code/kern/mm/pmm.c 中 //lab2 function1 2411333 标记处的函数体，
+保留标记，不修改其他文件和既有测试，不硬编码观测得到的地址或空闲页数。
+交付完整函数及必要说明，由我在 WSL 编译运行并反馈真实输出。
+
+[RELY]
+先读取 code/kern/mm/ 下的 pmm.c、pmm.h、memlayout.h、mmu.h、
+default_pmm.c，以及 code/kern/driver/dtb.h 中的实际定义。
+- entry.S 已建立启动映射并启用 Sv39，内核运行在高虚拟地址空间。
+- kern_init() 已先清零 BSS，再执行 dtb_init()。
+- 通过 get_memory_base()/get_memory_size() 取得 base 和 size。
+- 链接符号 end 给出内核镜像末端的虚拟地址。
+- pmm_init() 依次调用 init_pmm_manager()、page_init()、check_alloc_page()；
+  本任务首次运行时选择的是 default_pmm_manager。
+- 框架提供 pages、npage、nbase、va_pa_offset、struct Page，以及页大小、
+  物理上界、地址转换、对齐和页状态宏。
+- init_memmap() 将连续可用页交给当前管理器；交接前页面必须标记为 Reserved。
+可以使用 panic、cprintf、init_memmap、pa2page、PADDR 和框架已有宏，
+不得重复定义这些接口或假设 end 与空闲区位置永远不变。
+
+[GUARANTEE]
+实现以下现有函数，不改变其签名：
+static void page_init(void);
+正确设置 va_pa_offset、npage、pages，初始化页保留状态，
+仅将排除固件、内核和描述符数组之后的完整可用页交给管理器。
+
+[SPECIFICATION]
+Pre-Condition：
+- 启动映射已建立，设备树解析已执行，物理页管理器已选择并初始化。
+- end 和相关常量、宏采用当前框架的真实定义。
+
+Post-Condition：
+1. 若 base 或 size 为 0，调用 panic 终止初始化。
+2. va_pa_offset = KERNBASE - KERNEL_BEGIN_PADDR，等于当前启动映射偏移。
+   VA 与 PA 必须采用同一映射的对应端点，不能用 KERNBASE - base。
+3. npage = PPN(min(base + size, PHYSICAL_MEMORY_END))；
+   npage 为物理页号上界，管理描述符数为 npage - nbase。
+4. pages = (struct Page *)ROUNDUP((uintptr_t)end, PGSIZE)，
+   数组位于内核镜像之后并按页对齐。
+5. 先对 [nbase,npage) 覆盖的全部描述符设置 Reserved。
+6. 数组末端为 pages + (npage-nbase)，转换为物理地址并向上按页对齐，
+   得到 freemem；当 PPN(freemem)<npage 时计算 nfree=npage-PPN(freemem)，
+   否则 nfree 为 0。
+7. 仅在 nfree>0 时调用 init_memmap(pa2page(freemem), nfree)。
+8. 用 cprintf 输出 base、size、freemem 和 nfree，供实际运行核对。
+
+验收与限制：
+- 不修改 default_pmm.c、best_fit_pmm.c 中的既有测试。
+- 首次基线应输出 memory management: default_pmm_manager 及
+  check_alloc_page() succeeded!。
+- 页表虚拟地址与物理地址之差应为 0xFFFFFFFF40000000；
+  该基线中页表物理地址位于 0x8020xxxx 且按页对齐。
+- 不将内核、描述符数组等占用页登记为空闲，不固定使用参考输出中的页数。
+- 未运行的结果只能作为预期；实际输出由我编译运行后提供。
+````
+
+##### 实现迭代过程
+
+本模块经历一次规格审查修正；更正后的实现首次编译运行即通过该阶段验收，未根据运行报错再次修改函数。
+
+###### 第一次迭代：审查并修正规格
+
+**遇到的问题：** 原 Spec 将 `va_pa_offset` 写成 `KERNBASE - get_memory_base()`，得到 `0xffffffff40200000`，与启动映射及验收要求的 `0xffffffff40000000` 矛盾。
+
+**原因分析：** `KERNBASE` 对应内核物理装载地址 `0x80200000`，而设备树的 base 是 RAM 起点 `0x80000000`；两者交叉配对，多减了 2 MiB，会使后续虚拟地址转物理地址的结果偏低。
+
+**问题解决策略：** 实现 AI 对照 entry.S、memlayout.h、Makefile 装载位置及 test_lab2.c 的偏移检查，提出改用 `KERNBASE - KERNEL_BEGIN_PADDR`；将这一修正同步回填 Spec 和提示词。没有修改测试来迎合错误公式。
+
+###### 第二次迭代：实现生成与首次运行
+
+**实际结果：** `make qemu` 编译并启动成功，出现 `check_alloc_page() succeeded!`；空闲区起点为 `0x80347000`、空闲页数 31929，页表地址为 `0xffffffffc0205000 / 0x80205000`，差值正确。与原空壳参考值相差一页，是内核增长后 end 跨页造成的布局变化，公式自动适应，无需修改代码。
+
+**最终结果与关键改进：** 完成物理页初始化；后续默认模式评分中的 `check page init` 为 OK，与 Best-Fit 项共同得到 20/20。通过独立验收条件发现 Spec 的配对错误，并保留真实计算结果，而不是硬编码参考地址和页数。
+
+##### 测试与验证
+
+默认 Best-Fit 模式运行和课程评分截图：
+
+![物理内存初始化及默认管理器运行通过](./images/buddy-regression-bestfit-slub-pass.png)
+
+![page_init 与 Best-Fit 课程评分 20/20](./images/buddy-regression-grade-20.png)
+
+##### 与 OS 原理的对应
+
+评分中的初始化检查覆盖偏移、设备树非零信息、页号上界、数组对齐与位置、可用页数、内核尾页及数组起始页保留状态、页描述符换算往返。
+
+该实现把原理课中的物理页帧管理、元数据开销、保留区保护和页边界对齐落实到代码中；页表负责地址映射，`Page` 数组和分配器负责页面占用状态，二者职责不同。实验还表明，验收条件可以反过来发现 Spec 本身的错误。
 
 #### 扩展任务 Challenge：硬件的可用物理内存范围的获取方法（思考题）
 
-**负责人：** [2410690-王睿瑜]
+**负责人：** 2410690-王睿瑜
 
 OS 可以通过固件或引导程序提供的硬件信息，获取可用物理内存范围。 例如，RISC-V 平台可以使用设备树，其他平台可以使用 UEFI 内存映射或 BIOS E820 信息。
 
@@ -195,7 +307,7 @@ int kern_init(void);
 3. **与其他模块的交互关系。** 物理内存初始化模块通过 `page_init()` 确定可用区域，再经当前 `pmm_manager` 的接口登记空闲页。上层统一调用 `alloc_pages()`、`free_pages()` 和 `nr_free_pages()`，由注册的分配器处理，当前选择 Best-Fit。SLUB 使用这些页接口取得和归还物理页，再向调用者提供 `slub_alloc()` 和 `slub_free()`。内核在 `pmm_init()` 完成后初始化 SLUB，并调用独立测试检查对象分配、数据隔离、复用和页面回收。
 
 #### 模块二任务一：理解first-fit 连续物理内存分配算法（思考题）
-**负责人：** [2413497-姚嘉乐]
+**负责人：** 2413497-姚嘉乐
 
 First-Fit 分配器将空闲物理页组织成按地址递增排列的空闲块链表，每个节点只代表一个连续空闲块的首页。首页的 `property` 记录块内页数，`PG_property` 标志表明它是空闲块首页，`nr_free` 记录所有空闲块的总页数。
 
@@ -429,9 +541,11 @@ Best-Fit 算法仍有进一步的改进空间。当前实现已经具备相邻�
 
 **负责人：** 2411333-吴卓彦
 
-##### 功能与接入方式
+##### 模块功能描述
 
-本模块在 `kern/mm/buddy_pmm.c` 中实现 `buddy_pmm_manager`，通过 `buddy_pmm.h` 声明注册对象。沿用物理页管理框架的六个接口：
+本模块在 `kern/mm/buddy_pmm.c` 中实现 `buddy_pmm_manager`，通过 `buddy_pmm.h` 声明注册对象。沿用物理页管理框架的六个接口。
+
+**需要实现/修改的函数：**
 
 ```c
 static void buddy_init(void);
@@ -442,7 +556,9 @@ static size_t buddy_nr_free_pages(void);
 static void buddy_check(void);
 ```
 
-`page_init()` 负责排除固件、内核和描述符数组占用的页面，并把可用区域交给所选管理器；Buddy 负责组织这些页的分配与回收。Makefile 在 `BUDDY=1` 时定义 `USE_BUDDY_PMM`，`init_pmm_manager()` 据此选择 Buddy；未启用时保留原有 Best-Fit 选择。两种模式使用相同的 `alloc_pages/free_pages` 公共接口，SLUB 无需改变调用方式。切换模式前执行 `make clean`，避免复用按另一模式编译的目标文件。
+**功能说明：**
+
+`page_init()` 负责排除固件、内核和描述符数组占用的页面，并把可用区域交给所选管理器；Buddy 负责组织这些页的分配与回收。Makefile 在 `BUDDY=1` 时定义 `USE_BUDDY_PMM`，`init_pmm_manager()` 据此选择 Buddy；未启用时保留原有 Best-Fit 选择。本模块还修改 `static void init_pmm_manager(void)` 的条件选择及 Makefile 编译开关。两种模式使用相同的 `alloc_pages/free_pages` 公共接口，SLUB 无需改变调用方式。切换模式前执行 `make clean`，避免复用按另一模式编译的目标文件。
 
 ##### 核心函数与设计依据
 
@@ -454,18 +570,342 @@ static void buddy_check(void);
 
 阶数上限根据本框架可管理的 128 MiB 物理内存确定，并在编译期核对覆盖能力。请求超出支持范围或无法满足连续块需求时安全失败；零请求和非法释放按断言拒绝。
 
-##### 提示词与实现迭代
+##### 最终提示词
 
-模块和测试分别使用四段式 `[PROMPT] / [RELY] / [GUARANTEE] / [SPECIFICATION]` 提示词生成，两份完整提示词及两份补充提示词保存在 [prompt.md 的练习 3](./prompt.md)。规格明确接口、绝对页号对齐、原请求释放约定、范围检查和可判定的测试结果。
+实现与测试使用两份独立提示词；以下完整列出已发送版本，不以外部链接代替提示词正文。对应 Spec 为：按绝对物理页号组织各阶空闲块，分配和释放使用一致的向上取整约定，失败保持状态不变，测试按规格构造预期并恢复真实环境。
 
-| 阶段 | 实际现象 | 原因与处理 |
-|---|---|---|
-| 模块首次运行 | Buddy 基础自检和基于 Buddy 的 SLUB 六组测试通过 | 模块已接入，继续生成独立测试验证具体算法场景 |
-| 测试审查 | 失败状态快照仅检查链表哨兵和计数 | 这些汇总信息不能证明内部节点及页元数据未变化；补充提示词要求逐字段比较全部 32 个模拟页，快照放入静态存储以控制栈占用 |
-| 独立测试首次运行 | 第 1 组通过，第 2 组在 `buddy_test_order_blocks(k) == 0` 处 panic | 测试先要求 order 4 有一块，随后循环又要求包含 order 4 的各阶全部为空，条件相互矛盾；保留有效断言，改为对全部支持阶中的 k!=4 检查为空 |
-| 修正后重跑 | 四组 Buddy 独立测试全部通过，恢复真实环境后的基础检查及 SLUB 六组也全部通过 | 本轮修正的是测试逻辑，未修改分配算法来迎合错误预期；最终运行截图见第五节 |
+###### 提示词一：生成 Buddy 模块及编译接入
 
-失败现场保存在 [首次独立测试断言失败截图](./images/buddy-v2-test-assertion-failure.png)。这一过程说明，测试代码也需要依据规格核查，不能把 AI 生成的断言直接视为正确标准。
+````text
+[PROMPT]
+
+任务：
+在当前 RISC-V uCore Lab2 框架中，从零实现并接入 Buddy System 物理页
+分配器，支持按 2 的整数次幂分配连续物理页、逐级拆分和伙伴合并。
+项目根目录为 E:\大三上\OS\OS2026_Labs，以下路径均相对于该目录。
+
+修改范围：
+- 新建 code/kern/mm/buddy_pmm.c 和 buddy_pmm.h。
+- code/kern/mm/pmm.c 仅增加必要头文件和 init_pmm_manager 的条件选择。
+- code/Makefile 增加 BUDDY=1 时定义 USE_BUDDY_PMM 的编译开关。
+- 未启用开关时保留真实代码中现有的管理器选择，不预设它一定是 First-Fit；
+  Buddy 的加入不得覆盖队友已接入或后续接入的 Best-Fit。
+
+操作与交付要求：
+- 先阅读真实代码并审查规格；发现矛盾时说明证据和修正理由。
+- 修改实际文件，不修改 page_init、公共 Page 布局、其他分配器、既有测试、
+  评分脚本或报告；保留原有初始化流程和 lab2 注释，新增任务代码注明 2411333。
+- 可以添加模块内部 static 辅助函数、宏和状态，不使用 malloc 或依赖
+  尚未初始化的分配器来分配元数据。
+- 说明修改文件、元数据含义、对齐与伙伴算法、分配和释放约定。
+- 本轮提供基础 check；完整验收测试由下一份独立提示词生成。
+- 给出先 make clean、再 make BUDDY=1 qemu 的步骤与预期检查点；恢复默认
+  构建前也需 make clean。不要替我运行 make、QEMU、GDB 或提交 Git。
+- 未运行的检查明确标为预期，不编造编译或测试通过记录。
+
+[RELY]
+
+请先读取以下文件的真实定义：
+- code/kern/mm/pmm.h、pmm.c、memlayout.h、mmu.h、default_pmm.c。
+- code/kern/mm/best_fit_pmm.h，及 pmm.c 当前实际使用的其他管理器头文件。
+- code/libs/list.h、defs.h，code/Makefile、code/tools/function.mk。
+
+框架已有 struct Page 和 struct pmm_manager，直接复用，不重复定义或改变布局。
+可以使用现有链表接口、页状态宏、page2ppn/page2pa、引用计数接口、assert
+和 cprintf；以实际声明为准。
+
+环境与调用约定：
+- page_init 已实现；pmm_init 依次选择并初始化管理器、调用 page_init 登记
+  可用页、调用管理器 check。此时尚无其他并发分配者。
+- init_memmap(base, n) 的 base 是起始页的描述符指针，n 是连续可用页数。
+  页面交接时带有 PG_reserved；模块登记后才解除相应可用页的保留状态。
+- nbase 和 npage 界定描述符覆盖的物理页号区间，pages 是描述符数组地址。
+  描述符存在不代表对应物理页可以分配，仍须检查该页是否已登记为可用。
+- page2ppn 返回绝对物理页号，page2pa 返回页起始物理地址；伙伴计算和
+  对齐统一使用绝对物理页号，不混用数组下标或区域相对编号。
+- 分配失败返回 NULL，依据现有分配器实现及框架失败测试。
+
+[GUARANTEE]
+
+必须实现以下模块内部接口：
+static void buddy_init(void);
+static void buddy_init_memmap(struct Page *base, size_t n);
+static struct Page *buddy_alloc_pages(size_t n);
+static void buddy_free_pages(struct Page *base, size_t n);
+static size_t buddy_nr_free_pages(void);
+static void buddy_check(void);
+
+必须在 buddy_pmm.c 定义具有外部链接的注册对象：
+const struct pmm_manager buddy_pmm_manager;
+
+在 buddy_pmm.h 声明：
+extern const struct pmm_manager buddy_pmm_manager;
+
+注册对象的六个回调绑定上述对应函数。保留现有公共分配/释放接口不变。
+init_pmm_manager 在 USE_BUDDY_PMM 启用时选择 buddy_pmm_manager，
+否则沿用原选择；保留管理器名称输出和 init 调用。
+
+[SPECIFICATION]
+
+全局不变量：
+- order=k 的空闲链表只包含完整、空闲、按绝对物理页号对齐的 2^k 页块。
+- 每个空闲块只登记其首页节点；空闲块互不重叠，且全部属于已登记可用页。
+- 空闲页总数等于各阶空闲块实际页数之和；分配块与空闲块不重叠。
+- 所有移位、向上取整与范围计算避免溢出；检查范围后才访问描述符。
+
+buddy_init
+Pre-Condition：管理器初始化阶段，尚无待保留的存活分配。
+Post-Condition：各阶空闲链表合法且为空，计数为 0，内部状态可接收区域登记。
+
+buddy_init_memmap
+Pre-Condition：模块已初始化；n>0，base 指向合法的连续 n 个页描述符；
+这些页尚未登记且全部为框架交接的保留页，不含内核或描述符数组占用页。
+Post-Condition：
+- 恰好登记这 n 页，空闲数增加 n，正确设置标志、引用计数和块元数据。
+- 从起点逐步选择同时满足物理页号对齐和剩余长度限制的最大合法块，
+  不越界、不丢弃非 2 的整数次幂区域的尾页。
+- 对可合并的同阶空闲伙伴进行必要合并，不跨越保留或未登记的页。
+
+buddy_alloc_pages
+Pre-Condition：模块已初始化且可用区域已登记；n>0，零请求以 assert 拒绝。
+Post-Condition：
+- 用整数运算求满足 2^order>=n 的最小阶数。
+- 从目标阶向更高阶查找首个非空链表，取一块并逐级对半拆分；每次将另一半
+  放入相应低阶链表，直到取得目标阶块。
+- 成功返回该块首页描述符，记录原请求及实际块大小，空闲数减少 2^order。
+- 无合适块、超出支持阶数或请求取整无法安全表示时返回 NULL；失败时
+  空闲链表、计数和已有分配不变。总空闲数足够不代表连续块足够。
+
+buddy_free_pages
+Pre-Condition：base 是尚未释放的原分配首页，n 等于原申请页数且 n>0。
+Post-Condition：
+- 与分配时相同地向上取整，归还整个块，空闲数只增加实际归还页数一次。
+- 按 伙伴物理页号=当前起始物理页号^(1UL<<order) 计算候选位置。
+- 确认候选整块在已登记范围内，且首页代表同阶完整空闲块，才能合并。
+- 移除伙伴旧链表节点，以较低起始物理页号作为新起点，order 加 1，继续
+  尝试；不能再合并时将结果加入对应链表。合并不再次增加空闲数。
+Requirements：释放前核验原分配记录；重复释放、错误起点、请求量不匹配
+等错误按 assert/panic 风格拒绝，必须在破坏链表或计数之前拒绝。
+
+buddy_nr_free_pages
+Pre-Condition：模块已初始化。
+Post-Condition：准确返回空闲物理页总数，不修改分配器状态。
+
+buddy_check
+Pre-Condition：真实可用内存已登记，没有并发分配者。
+Post-Condition：检查各阶块大小、对齐、范围、标志和计数等基础不变量；
+如进行分配/释放检查，须回收所有测试分配并恢复入口空闲数及分配能力。
+检查失败以断言定位；基础检查成功不得冒充尚未生成的完整测试已通过。
+
+init_pmm_manager 与编译接入
+Pre-Condition：内核处于管理器选择阶段。
+Post-Condition：BUDDY=1 定义 USE_BUDDY_PMM 并选择 Buddy，其余情况保留
+原管理器；两个模式均保留名称输出和 init 调用。使用已有目录编译机制
+构建新模块，不污染课程评分注入点。
+````
+
+###### 提示词二：生成 Buddy 独立测试
+
+````text
+[PROMPT]
+
+任务：
+为已经实现的 RISC-V uCore Lab2 Buddy 分配器生成独立的针对性测试，
+检验初始化、对齐、取整、拆分、合并、碎片化失败及状态恢复。
+项目根目录为 E:\大三上\OS\OS2026_Labs，以下路径均相对于该目录。
+
+修改范围与操作要求：
+- 仅在 code/kern/mm/buddy_pmm.c 中增加 static 测试辅助函数，并在原有
+  buddy_check() 中接入；保留已有基础检查和真实内存分配/释放检查。
+- 不修改分配算法、元数据语义、公共接口、其他分配器、SLUB、评分脚本或报告。
+- 测试按规格独立构造预期值，不复制错误实现作为预期；若发现实现问题，
+  保留失败并报告最小触发场景、期望与实际表现，交由后续独立修正。
+- 新增测试注释说明每组测试的检验依据及局限。
+- 不替我运行 make、QEMU、GDB 或提交 Git；给出用户执行步骤和预期输出。
+  不编造运行结果，也不要把已有基础自检通过写成新增测试通过。
+
+[RELY]
+
+先读取：
+- code/kern/mm/buddy_pmm.c、buddy_pmm.h、pmm.c、pmm.h、memlayout.h、mmu.h。
+- code/libs/list.h、defs.h，code/kern/debug/assert.h、code/libs/stdio.h。
+- code/kern/init/init.c，确认 Buddy check 发生在 SLUB 初始化之前。
+- report/prompt.md 中练习 3 的 Spec 与第一轮真实运行记录。
+
+已确定的行为：
+- order=k 的块实际占用 2^k 页；alloc(n) 向上取整，free(p,n) 使用原请求。
+- 以绝对物理页号判断对齐和计算异或伙伴，失败返回 NULL 且不改变状态。
+- Buddy 私有链表和计数在同一源文件内可供 static 测试函数检查；框架现有
+  assert/cprintf 可用，不需要导出这些私有状态。
+- 正常启动无并发分配者，但不能损坏真实内存分配器状态或后续 SLUB 测试。
+
+测试隔离依据：
+- 固定 16/19 页的情景不能直接用整机空闲池，否则其余内存会掩盖预期失败。
+- 可在同一模块内建立有界 static struct Page 模拟数组，仅测试描述符算法。
+  临时使用该数组作为 pages，并把 npage 设为 nbase+模拟页数；nbase 是 const，
+  不得修改。先确认其实际值满足测试区域所需对齐，按绝对页号计算期望。
+- 必须完整保存并恢复真实 pages、npage、各阶链表头和空闲计数。复制出的真实
+  哨兵仅作为恢复快照，不可当作已迁移的可遍历链表使用；模拟测试期间只访问
+  模拟描述符，不触及真实链表节点或其页状态。不临时改 va_pa_offset。
+- 模拟页表述的是测试描述符，其 page2pa 计算值不能用来读写真实物理内存。
+  若采用其他隔离方案，先说明其状态保存与恢复为何完整，再实现。
+
+[GUARANTEE]
+
+新增以下模块内测试入口，可以添加必要的 static 辅助函数和有界静态数组：
+static void buddy_test_init_ranges(void);
+static void buddy_test_split_merge(void);
+static void buddy_test_fragmentation(void);
+static void buddy_test_failure_state(void);
+
+在现有 static void buddy_check(void) 中调用上述测试，确保其运行时管理器
+为 Buddy，测试后恢复真实环境，再完成真实分配器基础一致性复查。
+不重复初始化 SLUB，不删除原有 check 的有效检查。
+
+[SPECIFICATION]
+
+所有固定编号均指测试基准附近的相对偏移；实际对齐和伙伴断言使用绝对页号。
+模拟环境每组开始前独立初始化，未登记的模拟页始终保持 Reserved。
+
+buddy_test_init_ranges
+Pre-Condition：受控模拟环境已建立，测试数组至少包含 32 个描述符。
+Post-Condition：
+- 对 16 页对齐的起点登记 19 页，验证形成 16+2+1 页，计数为 19，尾页可用。
+- 重建空环境，只登记偏移 4～15 的 12 页，验证 4～7 是 order 2，
+  8～15 是 order 3；其余页没有进入链表。
+- 分两次登记相邻伙伴区域，例如先 0～3 再 4～7，验证最后可申请完整 8 页。
+- 覆盖合法的单页范围尾部，候选伙伴越界或未登记时不可误合并或越界访问。
+
+buddy_test_split_merge
+Pre-Condition：模拟环境仅登记对齐的 16 页。
+Post-Condition：
+- 分配 3 页成功，实际扣除 4 页，物理页号按 4 页对齐；再申请 5 页成功，
+  实际扣除 8 页，按 8 页对齐；两个实际分配区间不重叠，剩余 4 页。
+- 按原请求量释放两块，空闲数恢复 16；随后申请 16 页成功，证明确实合并。
+- 归还该块并验证完整状态恢复。申请返回地址不作无依据的固定顺序假设。
+
+buddy_test_fragmentation
+Pre-Condition：模拟环境仅登记对齐的 16 页。
+Post-Condition：
+- 分配四块各 4 页，通过返回块的物理地址排序确定实际空间顺序。
+- 释放排序后的第一、第三块，计数为 8；申请 8 页返回 NULL，计数和各阶
+  空闲块集合与失败前完全相同，仍存活的分配记录保持有效。
+- 释放第二块，与第一块合成 8 页；申请 8 页成功，剩余空闲数为 4。
+- 归还新块和仍存活的第四块，恢复完整 16 页，并再次成功申请和归还 16 页。
+
+buddy_test_failure_state
+Pre-Condition：受控模拟环境已登记对齐的 16 页。
+Post-Condition：
+- 申请 17 页、超过实现支持最大块的请求、接近 size_t 上限的请求均返回 NULL。
+- 失败前后空闲数、各阶空闲块集合相同，不能只凭总计数判断无副作用。
+- 保留一个合法存活分配时再次进行超大请求，确认其分配记录未改变且仍可
+  正常按原请求释放；随后普通分配和释放仍成功。
+
+测试输出与恢复要求：
+- 每组全部检查完成后才输出对应 [BUDDY] ...: PASS；仅四组全部成功且真实
+  分配器状态已恢复并复查后输出 [BUDDY] independent tests passed!。
+- 不在这次正常启动路径中直接触发预期会 panic 的零请求或非法释放。
+  输出说明这些拒绝路径尚未独立动态验证，不能声称已覆盖。
+- 函数返回时无测试存活分配，恢复真实 pages/npage、链表和计数；确保后续
+  SLUB 测试仍能使用真实物理页。
+- 编译步骤为用户先 make clean，再 make BUDDY=1 qemu；说明预期标记，
+  实际结果留待用户反馈。
+````
+
+##### 实现迭代过程
+
+模块实现首次生成后通过基础运行；随后单独生成测试，经历一次审查补强和一次真实运行失败后的断言修正。完整过程如下。
+
+###### 第一次迭代：模块生成与基础运行
+
+**实现内容：** 新建 buddy_pmm.c/h，提供六个回调及注册对象，通过 BUDDY 编译开关接入，默认模式保留 Best-Fit。
+
+**实际结果：** 用户执行 `make clean` 后运行 `make BUDDY=1 qemu`，出现 `buddy_check(): basic invariants and alloc/free round-trip passed` 和 `check_alloc_page() succeeded!`，后续 SLUB 六组也通过。本轮没有编译或运行错误驱动的算法修正，继续通过独立测试验证具体分配场景。
+
+![Buddy 模块首次运行与 SLUB 测试结果](./images/buddy-v1-output.png)
+
+###### 第二次迭代：独立测试生成与失败状态快照补强
+
+**遇到的问题：** 测试最初只比较各阶哨兵的头尾指针和空闲计数，不能证明中间节点及页描述符未变化。此问题在运行前审查发现，不虚构对应的运行报错。
+
+**问题解决策略：** 发送下列补充提示词，要求保存并逐字段比较全部 32 个模拟页的 flags、property、ref 和链表指针；快照采用静态存储，避免增加内核栈压力。
+
+````text
+[PROMPT]
+补强 Buddy 测试中“分配失败不改变状态”的检查，仅修改测试辅助代码。
+
+[RELY]
+读取 buddy_pmm.c 中 buddy_test_state_save 和
+buddy_test_state_assert_same。当前只保存各阶哨兵指针和计数，
+不足以验证模拟页描述符及链表内部节点未改变。
+
+[GUARANTEE]
+保留现有测试入口和分配算法，扩充状态快照与比较。
+使用有界静态存储，避免扩大内核栈占用。
+
+[SPECIFICATION]
+保存并逐项比较：
+1. 空闲页计数及各阶哨兵的 prev/next；
+2. 全部模拟页的 flags、property、ref；
+3. 全部模拟页 page_link 的 prev/next。
+不要使用包含结构体填充字节的整块内存比较。
+所有项目一致才判定失败无副作用，并修正原有过度概括的注释。
+不要运行 make/QEMU，由我执行。
+````
+
+**修改结果：** 增加页状态快照结构及逐项断言，修正“哨兵相同即整个状态相同”的过度概括；未修改分配算法，随后由用户执行真实编译运行。
+
+###### 第三次迭代：修正独立测试的矛盾断言
+
+**遇到的问题：** 独立测试首次运行第 1 组通过，第 2 组在 `buddy_test_order_blocks(k) == 0` 处 panic，失败位置为当时的 buddy_pmm.c:528。
+
+**原因分析：** 测试先要求 order 4 恰有一个 16 页块，随后却要求 k=0..14 各阶全部为空，把 order 4 也包括在内；循环同时遗漏了最高阶。失败源于测试预期自相矛盾。
+
+![Buddy 独立测试首次运行的断言失败](./images/buddy-v2-test-assertion-failure.png)
+
+**问题解决策略：** 将真实报错及正确的阶分布写入以下四段式补充提示词，仍由实现 AI 修改测试，保留原有有效检查。
+
+````text
+[PROMPT]
+修正 Buddy 独立测试首次运行中发现的断言错误。
+仅修改测试代码，不修改分配器算法。
+
+[RELY]
+用户实际运行 make clean 后执行 make BUDDY=1 qemu：
+[BUDDY] 1 init ranges: PASS
+随后在 buddy_pmm.c:528 触发：
+assertion failed: buddy_test_order_blocks(k) == 0
+
+请读取 code/kern/mm/buddy_pmm.c 中
+buddy_test_split_merge() 的实际代码。
+
+当前先断言 order 4 有一个块，随后又在 k=0..14
+的循环中要求各阶均为空。循环包含 order 4，
+导致测试条件相互矛盾。
+
+[GUARANTEE]
+修正 buddy_test_split_merge() 末尾的空闲链表状态检查。
+保留现有测试入口、其他有效断言和分配器实现。
+不得删除失败检查来绕过问题。
+
+[SPECIFICATION]
+前置条件：
+受控区域只有对齐的16页，分配块已全部归还。
+
+后置条件：
+1. order 4 恰好有一个完整的16页空闲块。
+2. 遍历 0 至 BUDDY_MAX_ORDER，包含最大阶；
+   对所有 k != 4 的阶，断言空闲块数为0。
+3. 保留区域起点、块大小及链表归属的现有检查。
+
+说明修改位置及原因。
+不要替我运行 make/QEMU，不提交 Git，不修改报告；
+由我重新运行并反馈真实结果。
+````
+
+**实际结果：** 清理后重跑 Buddy 模式，四组独立测试均 PASS，真实页回环与一致性检查通过，后续 SLUB 六组均 PASS。随后切回默认 Best-Fit 模式运行，检查和 SLUB 测试通过，再运行 `make grade` 得到 20/20。
+
+**最终结果与关键改进：** 完成模块及四组独立测试；补强分配失败的状态比较，并依据正确规格修复测试断言，未通过删除检查或修改分配算法来掩盖错误。
 
 ##### 测试覆盖与有效性
 
@@ -478,14 +918,22 @@ static void buddy_check(void);
 | fragmentation | 四个 4 页块中仅释放空间序第 1、3 块，虽然共空闲 8 页，申请连续 8 页仍失败；再释放第 2 块后可申请 8 页，验证碎片化失败及伙伴合并 |
 | failure state | 17 页、超出最大阶及接近 size_t 上限的请求失败；逐项检查计数、各阶哨兵和全部模拟页状态不变，存活分配可正常释放，随后普通分配仍成功 |
 
-这些测试验证描述符层的受控场景，并结合真实页调用验证运行接入。零请求、重复释放、错误起点及请求量不匹配会触发预期 panic，本次正常启动未独立动态触发这些拒绝路径；测试输出中明确标注了这一覆盖范围。
+这些测试验证描述符层的受控场景，并结合真实页调用验证运行接入。零请求、重复释放、错误起点及请求量不匹配会触发预期 panic，本次正常启动未独立动态触发这些拒绝路径。
+
+##### 测试与验证
+
+![Buddy 四组独立测试及真实环境恢复后的 SLUB 测试通过](./images/buddy-v3-independent-tests-pass.png)
+
+![默认 Best-Fit 模式回归评分 20/20](./images/buddy-regression-grade-20.png)
+
+
 
 ##### 与 OS 原理的对应
 
 Buddy 将连续内存管理限制为按阶组织的块，借助对半拆分和伙伴合并维护可用空间。它以块内未使用空间换取规则化的管理，体现内部碎片与管理代价的取舍；碎片化测试同时说明空闲总量与可用连续块大小是两个不同条件。SLUB 在其上进一步按对象大小组织内存，形成物理页管理与对象管理的分层。
 
 #### 模块二扩展任务Challenge：任意大小的内存单元 slub 分配算法（设计提示词借助 AI 完成）
-**负责人：** [2413497-姚嘉乐]
+**负责人：** 2413497-姚嘉乐
 
 ##### 最终模块生成提示词：
 
@@ -796,6 +1244,89 @@ int kern_init(void);
 这些测试通过公开接口，将**返回地址、有效区间、逐字节数据和物理页统计**结合起来验证，能够发现仅检查返回值非空时难以发现的对象重叠、数据破坏、槽位未复用、页面泄漏及失败后状态损坏。测试动态记录空闲页基准和大对象的实际页开销，不依赖固定地址或私有管理头大小，因而能有效检验当前 SLUB 实现的核心功能。
 
 ---
+
+### 功能模块：构建、链接与评分流程调查
+
+**负责人：** 2411333-吴卓彦
+
+#### 模块功能描述
+
+**需要实现/修改的函数：** 本调查不新增或修改函数，分析对象是 Makefile、function.mk、三个链接脚本、inject.py、test_lab2.c 和 grade.sh。重点调用包括 `test_page_init()`、`test_best_fit()`、`quick_check()`、`check_result()`、`check_regexps()`、`pass()`、`fail()` 和 `show_final()`。
+
+**功能说明：** 本调查解释源码如何形成镜像，以及测试如何接入、执行和计分，为解释运行输出、评分结果和构建模式切换提供依据。
+
+本部分通过阅读实际链接规则、对照本地 `lab1` 与 `lab2` 的 Makefile，并结合本次运行和评分输出，调查辅助文件的用途。
+
+#### 链接脚本与实际构建路径
+
+| 文件 | 架构与布局 | 当前用途 |
+|---|---|---|
+| `tools/kernel.ld` | `OUTPUT_ARCH(riscv)`，`ENTRY(kern_entry)`，布局从 `0xffffffffc0200000` 开始 | Makefile 的链接命令通过 `-T tools/kernel.ld` 实际使用 |
+| `tools/kernel_nopage.ld` | `elf32-i386`、`OUTPUT_ARCH(i386)`、入口符号 `kern_entry`，布局从 `0x0100000` 开始 | 当前 Makefile 和 function.mk 未引用，不参与本次 RISC-V 内核链接 |
+| `tools/boot.ld` | `elf32-i386`、`OUTPUT_ARCH(i386)`，布局从 `0x7c00` 开始，未显式写 `ENTRY` | 当前构建规则未引用；包含 `bootasm.o` 的启动节安排，面向另一套引导布局 |
+
+结论以链接命令的真实引用为依据，脚本中位置计数器的初值是节的起始布局地址，`ENTRY` 指定入口符号，两者概念不同。
+
+构建仍沿用 Lab1 的基本链路：源文件编译成 `.o`，`KOBJS = $(call read_packet,kernel libs)` 汇总内核与库的目标文件，链接为 ELF 格式的 `bin/kernel`，再由 `objcopy --strip-all -O binary` 生成裸镜像 `bin/ucore.img`。`$@` 指当前规则目标，因此链接命令的 `-o $@` 指定 `bin/kernel`；命令开头的 `$(V)` 在 `V := @` 时抑制命令回显，与自动变量 `$@` 的作用不同。
+
+Lab2 链接脚本安排内核在高虚拟地址运行，而 QEMU 的 `-device loader` 仍把裸镜像放到物理地址 `0x80200000`。物理装载位置、链接后的运行地址和启动时建立的页表映射共同构成启动条件；`page_init()` 使用链接符号 `end` 定位内核之后的描述符数组。
+
+#### Makefile 相比 Lab1 的变化
+
+本地 `lab1` 与当前 `lab2` 的差异中，主要变化如下；Buddy 开关属于本组实现阶段加入的内容，其余列出的测试/评分规则在导入的 Lab2 框架中已有。
+
+| 变化 | 作用 |
+|---|---|
+| `PROJ := lab2` | 更新实验标识，影响提交包等由 PROJ 派生的名称 |
+| `CFLAGS2 = $(CFLAGS) -D ucore_test`、`add_files_cc2` 及目标判断 | 当 `MAKECMDGOALS` 恰为 `test` 时，内核源码使用带 `ucore_test` 的编译参数，启用相关条件代码；该模式不等于 grade 的临时测试注入 |
+| 内核源码目录与头文件搜索目录调整 | 相比 Lab1 的列表移除 `kern/trap` 等路径并调整目录组织；当前页分配器及 SLUB 源码由已有 `kern/mm` 目录收集机制纳入构建 |
+| `SPIKE` 变量与 `spike` 目标、`test` 目标 | 增加对应启动入口；本次实际运行和截图使用 QEMU，未据此声称验证了 Spike |
+| `GRADE_TMP` 与重写的 `grade` 配方 | 将项目复制到 `/tmp/lab2_grade`，在临时副本注入测试，再运行评分脚本 |
+| `BUDDY=1` 对应 `-DUSE_BUDDY_PMM` | 本组新增的管理器选择开关，默认保留 Best-Fit；开关定义放在 CFLAGS 读取 DEFS 之前 |
+
+当前 `CFLAGS` 以 `:=` 定义，是立即展开变量；其后 `CFLAGS += ... $(DEFS)` 在读取这一行时展开 DEFS。因此 Buddy 对 DEFS 的追加必须在该行之前，才能进入这套参数。更换编译开关时先 `make clean`，防止仅改变命令参数却复用旧 `.o`。
+
+#### 测试注入：inject.py 与 test_lab2.c
+
+`make grade` 先清理构建产物，将工作树复制到临时目录，再以临时目录为目标调用 `tools/inject.py`。脚本复制 `test_lab2.c/h` 到临时 `kern/test/`，扩充临时 Makefile 的源码与头文件目录，为临时 `pmm.c` 加入测试头文件，并在 `pmm_init()` 末尾插入 `test_page_init(); test_best_fit();`。测试文件仅存在于 tools 目录不会自动执行，必须纳入编译、链接并建立调用关系。
+
+注入脚本会检查重复注入等前置条件；例如 Makefile 已包含 `kern/test`、pmm.c 已包含测试头文件、定位函数或头文件锚点失败时，脚本通过 `die()` 报错退出。按当前 grade 配方，改写的是临时副本；原始源码不被修改，但本地原有构建产物会被 clean 清除。正常评分完成后清理临时目录。
+
+`test_page_init()` 检查八类结果：虚实偏移、设备树非零信息、页号上界、描述符数组位置和对齐、空闲页数量、内核尾页保留、数组起始页保留、地址与描述符换算往返。评分期望的 npage 使用 `PPN(base+size)`，实现则还限制 `PHYSICAL_MEMORY_END`；本平台设备树报告的 128 MiB 恰好与管理上界一致，因此两者相符。
+
+`test_best_fit()` 直接比较 `pmm_manager` 与 `&best_fit_pmm_manager`，检查选择的管理器是否正确。该函数在管理器初始化、空闲页登记和 `check_alloc_page()` 调用之后运行，无需重新初始化；算法的现有自检由前面的 `pmm_manager->check()` 执行。
+
+#### grade.sh 的结果判定与计分
+
+`grade.sh` 在临时目录编译内核、启动 QEMU，并把串口输出记录到 `.qemu.out`。文件末尾两次设置 `pts=10`，分别调用 `quick_check` 检查 `[Test 1] Page Init: PASS` 与 `[Test 2] Best-Fit: PASS`。调用链为 `quick_check → check_result → check_regexps → pass/fail`：匹配函数用 grep 查找标记，成功后 pass 输出 OK，同时增加已得分数和对应满分；失败只增加对应满分。最后 `show_final()` 汇总。
+
+Shell 调用 `quick_check 'check page init' '[Test 1] Page Init: PASS'` 时，第一个参数作为显示名称，后续参数作为匹配条件。函数中的 `$1` 取第一个参数，`shift` 移除首参数，`"$@"` 将剩余参数按原边界传递。行末反斜杠只是续行，不引入额外参数。
+
+本次实际评分显示 `lab2 injection complete`、两项 OK 和 `Total Score: 20/20`，证明测试成功接入并获得所需通过标记。评分证据见第五节；该总分仅覆盖这两项，Buddy 四组测试与 SLUB 六组测试的证据分别记录。
+
+
+#### 提示词记录说明
+
+本项为代码阅读和流程调查，不涉及新增功能代码。Buddy 编译开关属于上一模块的真实编码修改，其完整提示词与迭代已在 Buddy 章节列出。
+
+#### 分析与验证过程
+
+| 步骤 | 检查内容 | 依据与结果 |
+|---|---|---|
+| 链接规则核对 | 对比三个脚本的架构、入口设置和 Makefile 的 -T 参数 | 当前规则只使用 RISC-V 的 kernel.ld；另两个 i386 脚本未参与本次链接 |
+| 构建差异调查 | 对照本地 lab1 与 lab2 分支 Makefile | 区分框架新增的测试模式与临时评分流程，以及本组新增的 Buddy 开关 |
+| 评分链阅读 | 沿 grade 配方、inject.py、test_lab2.c、grade.sh 查找调用 | 明确脚本运行在 WSL，C 测试进入临时评分版内核；test 宏模式不等于 grade 注入 |
+| 实际结果核对 | 结合默认模式启动截图和 make grade 输出 | Best-Fit 与 SLUB 检查通过，两项课程评分均 OK，总分 20/20；未为此修改评分规则 |
+
+本项没有需要编造的代码生成迭代；分析过程的主要修正是区分布局起点与入口符号、Makefile 自动变量与 Shell 参数，以及“文件存在”“参与构建”“被调用执行”三个不同条件。
+
+#### 测试与验证
+
+评分截图见第五节“Buddy 接入后的默认模式回归与课程评分”。图中既包含 `lab2 injection complete`，也包含两项 OK 和 20/20。
+
+#### 与 OS 原理的对应
+
+交叉编译、静态链接和装载确定代码的目标架构及运行布局，启动分页连接高虚拟地址与实际物理装载位置；临时测试注入和串口结果检查则为内核功能提供可复现的验收路径。构建规则本身不承担页分配算法或页表查询的职责。
 
 ### 功能模块：启动分页机制分析
 
@@ -1287,3 +1818,5 @@ QEMU 软件 TLB 不只是硬件分页 TLB 的简单复制。即使客体分页�
 | 多核 TLB 一致性 | 修改映射后协调各 hart 缓存；本次仅观察单 hart |
 
 ### AI 协作开发的经验
+
+**吴卓彦：物理内存初始化、Buddy 实现与构建调查。** 本次实验我先根据框架写 Spec，再分别让 AI 生成模块与独立测试，自己在 WSL 编译运行，用输出核验结果。在 page_init 的验收标准发现了偏移公式中的错误配对；Buddy 独立测试又暴露了测试自身互相矛盾的断言。我们在实践中不仅要审查生成代码，也要检查规格和测试预期是否一致。每次反馈都需要附实际报错、预期状态和允许修改范围，再由实现 AI 迭代；提示词和截图同步保存，能够还原问题与解决过程。构建调查则帮助区分源码接入、编译、链接、调用和输出计分，避免把注入完成或语法检查误认为运行验收通过。
