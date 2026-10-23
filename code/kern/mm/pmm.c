@@ -1,5 +1,6 @@
 #include <default_pmm.h>
 #include <best_fit_pmm.h>
+#include <buddy_pmm.h> // lab2 2411333: make BUDDY=1（USE_BUDDY_PMM）时启用
 #include <defs.h>
 #include <error.h>
 #include <memlayout.h>
@@ -34,7 +35,14 @@ static void check_alloc_page(void);
 
 // init_pmm_manager - initialize a pmm_manager instance
 static void init_pmm_manager(void) {
-    pmm_manager = &default_pmm_manager;
+  //pmm_manager = &default_pmm_manager;
+    // lab2 2411333: BUDDY=1（定义 USE_BUDDY_PMM）时选择伙伴系统分配器，
+    // 其余情况沿用原有选择（当前为 best_fit），名称输出与 init 调用保持不变。
+#ifdef USE_BUDDY_PMM
+    pmm_manager = &buddy_pmm_manager;
+#else
+    pmm_manager = &best_fit_pmm_manager;
+#endif
     cprintf("memory management: %s\n", pmm_manager->name);
     pmm_manager->init();
 }
