@@ -1,97 +1,50 @@
-# OS2026 Lab2：物理内存管理与页表
+# OS2026 Lab3：中断与异常处理
 
-本实验在 Lab1 最小内核的基础上实现物理内存初始化、连续物理页分配和 SLUB 对象分配，并分析 Sv39 分页及 QEMU 的地址翻译过程。实验分支为 `lab2`，吴卓彦的个人开发分支为 `lab2-wzy`。
+本分支为 `Lab3`。实验在 Lab 2 内存管理与分页代码的基础上，完成 RISC-V Trap 入口、上下文恢复、中断与异常处理，并通过断点、非法指令和时钟中断验证完整流程。
 
-## 小组成员
+实验手册：[Lab 3](http://oslab.mobisys.top/lab2026/_book/lab3/lab3.html) · [练习](http://oslab.mobisys.top/lab2026/_book/lab3/lab3_2_1_exercise.html) · [报告要求](http://oslab.mobisys.top/lab2026/_book/lab3/lab3_4_lab_requirement.html)
 
-| 学号 | 姓名 | 负责内容 |
-|------|------|----------|
-| 2411333 | 吴卓彦 | `page_init()`、Buddy System、构建系统调查、报告整合 |
-| 2413497 | 姚嘉乐 |First-Fit 分析、Best-Fit、SLUB 分配器 |
-| 2410690 | 王睿瑜 |Sv39 页表与启动过程、GDB 调试 QEMU、可用物理内存探测思考题 |
+## 小组分工
 
-各成员负责自己模块的报告、提示词和测试记录，最后统一整合。
+| 任务 | 姓名 | 学号 | 负责范围 |
+|---|---|---|---|
+| A：Trap 汇编入口与返回 | 姚嘉乐 | 2413497 | `code/kern/trap/trapentry.S` 中的 `RESTORE_ALL`、`__alltraps`；Trap frame 传参、寄存器和 CSR 恢复 |
+| B：中断分类与时钟处理 | 吴卓彦 | 2411333 | `code/kern/trap/trap.c` 中的 `interrupt_handler()`；时钟重设、`ticks` 统计、其他中断分类与回退输出 |
+| C：异常处理与复核 | 王睿瑜 | 2410690 | `code/kern/trap/trap.c` 中的 `exception_handler()`；断点和非法指令的 `epc` 更新、异常回退与跨模块复核 |
 
-## 仓库约定
+三人分别记录自己任务的 Spec、Prompt、实际 bug 与修复、测试证据和报告章节。B、C 都会编辑 `trap.c`，各自只修改负责的函数，合并时按函数检查差异。
 
-每个实验对应一个 `labx` 分支（`lab1`、`lab2`、…），分支根目录包含：
-
-- `code/` — 该实验实现后的源代码
-- `report/` — 实验交付物：
-  - `report.md` — 实验报告
-  - `prompt.md` — 本实验全部提示词汇总
-  - `images/` — 报告中引用的测试截图
-
-主要代码位置：
+## 代码结构
 
 | 路径 | 用途 |
-|------|------|
-| `code/kern/init/` | 保存启动参数、启用 Sv39 分页、执行内核初始化 |
-| `code/kern/driver/dtb.c` | 解析设备树，获取物理内存范围 |
-| `code/kern/mm/` | 页描述符、地址转换、物理内存管理与分配算法 |
-| `code/libs/` | 链表、字符串、格式化输出及 SBI 接口 |
-| `code/Makefile`、`code/tools/` | 构建、链接、调试及评分工具 |
+|---|---|
+| `code/kern/trap/trapentry.S` | Trap 入口、现场保存与恢复、调用 C 层 `trap()` |
+| `code/kern/trap/trap.c`、`trap.h` | Trap frame 定义、原因分派、中断与异常处理 |
+| `code/kern/driver/clock.c`、`intr.c` | OpenSBI 时钟事件与 S 模式中断使能 |
+| `code/kern/sync/sync.h` | 临界区关中断和恢复 |
+| `code/kern/mm/` | 延续 Lab 2 的物理内存管理与页表代码 |
+| `code/tools/grade.sh`、`inject.py` | Lab 3 本地测试注入和评分 |
+| `report/` | 报告、提示词和图片；目前仍是 Lab 2 内容，待更新 |
 
-## 实验进度
+## 当前状态
 
-截至 **2026 年 10 月 23 日**，已有实现与验证如下：
+- `code/` 已包含下载源码 `E:\大三上\OS\labs\lab3\lab3_new` 的全部文件；同名文件内容逐项一致。
+- 目录还保留六个 Lab 2 的 Buddy/SLUB 源码和测试文件，属于既有成果。
+- `trapentry.S` 的两处 `lab3 function1 YOUR CODE` 和 `trap.c` 的 `lab3 function2 YOUR CODE` 尚待实现，当前未验证 Lab 3 编译或评分。
+- 代码树目前有未提交的 Lab 3 框架改动。提交前保留 `lab3` 标记，并将相关 `YOUR CODE` 替换为实现者学号。
 
-| 任务 | 状态 |
-|------|------|
-| `page_init()` | 已实现；默认 QEMU 环境初始化与课程评分检查通过 |
-| First-Fit 分析与 Best-Fit 实现 | 已完成四函数分析及改进空间说明；Best-Fit 已实现并作为默认管理器，固定测试通过 |
-| Buddy System 与测试 | 已实现，支持独立编译选择；初始化、拆分合并、碎片化和失败状态四组测试通过 |
-| SLUB 分配器与测试（Challenge） | 已实现页级与对象级两层分配；六组测试在 Best-Fit 和 Buddy 两种底层模式均通过 |
-| 页表分析与 QEMU 调试 | 已记录启动分页、页表查询、软件 TLB 填充与命中、Bare 模式对比及调试截图 |
-| 可用物理内存探测思考题 | 已在报告说明 DTB、UEFI 内存映射和 BIOS E820 等方法 |
-| 构建系统调查 | 已分析链接脚本、Makefile 相对 Lab1 的变化、测试注入及评分调用链 |
-| 报告与提示词 | 已补充模块说明、完整提示词、真实迭代过程、测试证据与原理对照；`prompt.md` 保留提示词汇总 |
+## 构建与验证
 
-默认模式 `make grade` 的 `check page init` 和 `check best fit` 均为 OK，结果为 **20/20**。该评分覆盖课程的两项检查；Buddy 四组测试与 SLUB 六组测试分别保留运行证据，Challenge 加分以助教验收为准。
-
-## 运行与验证
-
-实验环境为 WSL Ubuntu，使用 SiFive RISC-V GCC 10.2.0 工具链和 QEMU 4.1.1。先将 `riscv64-unknown-elf-` 工具链加入 `PATH`，再在 WSL 中进入本分支的 `code/` 目录：
+在配置好 RISC-V 交叉编译工具链和 QEMU 的 WSL/Linux 环境中，进入 `code/` 执行：
 
 ```bash
-make          # 编译、链接并生成内核镜像
-make qemu     # 启动内核；退出时按 Ctrl+A，松开后按 X
+make          # 编译内核
+make qemu     # 启动 QEMU
 make grade    # 在临时副本中注入测试并评分
 ```
 
-默认使用 `best_fit_pmm_manager`。运行 Buddy 模式时，先清理旧构建产物，再启用编译开关：
+当前评分脚本有三组：Trap 入口和断点返回 35 分、非法指令返回 25 分、持续时钟中断 40 分。实现完成后还需核对手册要求与真实运行结果。
 
-```bash
-make clean
-make BUDDY=1 qemu
-```
+## 报告与提交
 
-应看到 `memory management: buddy_pmm_manager`、四组 `[BUDDY] ...: PASS`、`[BUDDY] independent tests passed!`，以及后续 `[SLUB] all tests passed!`。
-
-退出 QEMU 后，恢复默认 Best-Fit 模式同样先清理：
-
-```bash
-make clean
-make qemu
-# 退出 QEMU 后再执行：
-make grade
-```
-
-GDB 调试时，在两个 WSL 终端的 `code/` 目录分别执行 `make debug` 和 `make gdb`。
-
-`make test` 使用带 `ucore_test` 宏的编译模式并启动 QEMU；`make grade` 才会调用 `inject.py` 在临时副本中加入课程测试，再由 `grade.sh` 检查输出并计分。切换编译模式前先执行 `make clean`。
-
-## 报告与验证证据
-
-- [实验报告](report/report.md)：功能说明、提示词、实现迭代、QEMU 调试过程及知识点总结。
-- [提示词汇总](report/prompt.md)：各编码任务的 Spec、实现/测试提示词及补充修改记录。
-- [Buddy 独立测试与 SLUB 运行结果](report/images/buddy-v3-independent-tests-pass.png)。
-- [默认 Best-Fit 模式回归结果](report/images/buddy-regression-bestfit-slub-pass.png)。
-- [课程评分 20/20](report/images/buddy-regression-grade-20.png)。
-
-## 提交要求
-
-- 保留代码中的 `lab2` 任务注释，将 `YOUR CODE` 替换为实现者学号；不修改框架规定保留的测试函数。
-- 编码任务在 `report/prompt.md` 中记录 Spec、最终提示词和真实迭代过程；Buddy 与 SLUB 分别记录实现提示词和测试提示词。
-- 各模块报告包含功能与核心函数分析、测试证据、AI 生成代码的问题及修正，以及与 OS 原理知识点的对应关系；全组汇总原理中尚未在实验体现的知识点。
-- 测试截图放入 `report/images/`，在 `report/report.md` 中使用相对路径引用；个人开发分支的改动最终合入 `lab2` 分支。
+按手册用 Markdown 说明整体 Trap 执行流、各模块核心函数、每个练习的 Spec 和 Prompt、AI 代码的真实问题与修复，以及实验知识点与 OS 原理的关系。报告、提示词和截图放在 `report/`；最后核对注释中的学号，提交 `Lab3` 分支。
