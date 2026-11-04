@@ -9,3 +9,4 @@ void clock_init(void);
 void clock_set_next_event(void);
 
 #endif /* !__KERN_DRIVER_CLOCK_H__ */
+

@@ -40,3 +40,4 @@ main(int argc, char *argv[]) {
     printf("build 512 bytes boot sector: '%s' success!\n", argv[2]);
     return 0;
 }
+

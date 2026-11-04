@@ -74,6 +74,6 @@ void print_debuginfo(uintptr_t eip) { panic("Not Implemented!"); }
  * boundary.
  * */
 void print_stackframe(void) {
-
+    
     panic("Not Implemented!");
 }
