@@ -35,7 +35,7 @@ static void check_alloc_page(void);
 
 // init_pmm_manager - initialize a pmm_manager instance
 static void init_pmm_manager(void) {
-    pmm_manager = &default_pmm_manager;
+    pmm_manager = &best_fit_pmm_manager;
     cprintf("memory management: %s\n", pmm_manager->name);
     pmm_manager->init();
 }
@@ -81,7 +81,54 @@ size_t nr_free_pages(void) {
     return ret;
 }
 
-//lab2 请补充你在lab2中的代码
+//lab2补充的依赖代码
+static void page_init(void){
+    // kernel.ld 提供的链接符号：内核镜像（.bss）结束后的第一个地址
+    extern char end[];
+
+    // ① 读取设备树解析出的物理内存信息，无效则终止初始化
+    uint64_t base = get_memory_base();
+    uint64_t size = get_memory_size();
+    if (base == 0 || size == 0) {
+        panic("page_init: invalid memory info from dtb\n");
+    }
+
+    // ② 设置三个全局变量（必须先于下面所有用到 PADDR 的计算）
+    // 内核镜像被放在 VA = KERNBASE、PA = KERNEL_BEGIN_PADDR 处，
+    // 虚实偏移 = KERNBASE - KERNEL_BEGIN_PADDR，即 memlayout.h 的 PHYSICAL_MEMORY_OFFSET
+    va_pa_offset = KERNBASE - KERNEL_BEGIN_PADDR;
+    // 可管理内存上界：设备树报告的内存末端与物理内存上界取小
+    uint64_t mem_end = base + size;
+    if (mem_end > PHYSICAL_MEMORY_END) {
+        mem_end = PHYSICAL_MEMORY_END;
+    }
+    npage = PPN(mem_end);
+    // 页描述符数组紧跟内核镜像之后，向上取整到整页
+    pages = (struct Page *)ROUNDUP((uintptr_t)end, PGSIZE);
+
+    // ③ 把可管理范围内的全部页先标记为保留（default_init_memmap 的进门契约：
+    // 交给它的每个页必须已是 PG_reserved）
+    // 物理页号 [nbase, npage) 对应数组下标 [0, npage - nbase)，见 pa2page()
+    for (size_t i = 0; i < npage - nbase; i++) {
+        SetPageReserved(pages + i);
+    }
+
+    // ④ 空闲区 = 描述符数组末尾（换算成物理地址并向上取整到整页）之后的内存
+    uintptr_t array_end = PADDR(pages + (npage - nbase));
+    uintptr_t freemem = ROUNDUP(array_end, PGSIZE);
+    size_t nfree = 0;
+    if (PPN(freemem) < npage) {
+        nfree = npage - PPN(freemem);
+    }
+    // 至少有一个完整空闲页，才把空闲区交给分配器
+    if (nfree > 0) {
+        init_memmap(pa2page(freemem), nfree);
+    }
+
+    // ⑤ 打印内存布局
+    cprintf("memory: base = 0x%016lx, size = 0x%016lx\n", base, size);
+    cprintf("free memory: start = 0x%016lx, pages = %lu\n", freemem, nfree);
+}
 
 /* pmm_init - initialize the physical memory management */
 void pmm_init(void) {
