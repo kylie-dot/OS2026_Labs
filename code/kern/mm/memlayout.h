@@ -8,8 +8,10 @@
 // 0x7E00000 = 0x8000000 - 0x200000
 // QEMU 缺省的RAM为 0x80000000到0x88000000, 128MiB, 0x80000000到0x80200000被OpenSBI占用
 #define KERNTOP             (KERNBASE + KMEMSIZE) // 0x88000000对应的虚拟地址
-
+//方便起见，这里直接补了两个lab2代码会使用到的宏
+#define PHYSICAL_MEMORY_END         0x88000000
 #define PHYSICAL_MEMORY_OFFSET      0xFFFFFFFF40000000
+#define KERNEL_BEGIN_PADDR           0x80200000
 
 
 #define KSTACKPAGE          2                           // # of pages in kernel stack
