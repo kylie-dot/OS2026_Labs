@@ -7,7 +7,109 @@
 
 ## 功能模块一：Trap 上下文恢复与 Trap 入口功能
 
-本模块由其他成员负责，Spec、实际提示词和迭代结果待负责人补充。
+**负责人：** 姚嘉乐 2413497（code/kern/trap/trapentry.S）
+
+### 一、Spec（设计依据）
+
+**1. 输入与调用条件**
+
+- 采用框架已有的 `SAVE_ALL` 和 `struct trapframe` 布局；保存完成后，当前 `sp` 指向 Trap frame，`gpr.sp` 保存 Trap 前的原始栈指针。
+- C 语言接口为 `void trap(struct trapframe *tf)`，按照 RISC-V 调用约定使用 `a0` 传递第一个参数。
+
+**2. 输出与恢复要求**
+
+- `__alltraps` 将已保存的 Trap frame 传给 `trap()`，返回后进入已有的 `__trapret`。
+- `RESTORE_ALL` 从对应槽位恢复通用寄存器、`sstatus` 和 `sepc`；使用处理函数更新后的 EPC，并在完成其余读取后恢复原始 `sp`。
+- 保留已有的 `sret` 返回流程，不改变保存的返回特权级。
+
+**3. 修改范围**
+
+仅补全两处待实现代码，不修改 `SAVE_ALL`、结构体布局、现有接口和其他文件。
+
+### 二、最终提示词
+
+以下为实际使用的完整最终提示词。
+
+```text
+[PROMPT]
+任务：
+完成 Trap 上下文恢复与 Trap 入口功能。
+目标文件为 code/kern/trap/trapentry.S。
+
+操作要求：
+只补全 RESTORE_ALL 和 __alltraps 中的两处待实现代码。
+不得修改 SAVE_ALL、Trap frame 布局、现有接口及其他文件。
+保持代码可读，在关键步骤添加必要注释。
+
+输出要求：
+依据下面的依赖和规格，在项目中修改实际文件。
+将两处标记改为“#lab3 function1 2413497”。
+
+[RELY]
+先阅读：
+code/kern/trap/trapentry.S
+code/kern/trap/trap.h
+code/kern/trap/trap.c
+code/libs/riscv.h
+
+Trap frame 的结构为：
+
+struct trapframe {
+    struct pushregs gpr;
+    uintptr_t status;
+    uintptr_t epc;
+    uintptr_t badvaddr;
+    uintptr_t cause;
+};
+
+已有 SAVE_ALL 在当前内核栈上建立 Trap frame。
+执行完成后，sp 指向该 Trap frame；
+gpr.sp 保存的是分配 Trap frame 之前的原始 sp。
+
+C 语言处理接口为：
+void trap(struct trapframe *tf);
+
+RISC-V 调用约定使用 a0 传递第一个参数。
+trap() 可能修改 Trap frame 中的 epc。
+
+[GUARANTEE]
+
+1. 完成已有汇编宏 RESTORE_ALL。
+2. 完成 __alltraps 中 SAVE_ALL 之后的调用衔接代码。
+
+[SPECIFICATION]
+实现单元：__alltraps
+
+Pre-Condition：
+处理器已经进入 S 模式 Trap 入口，相关 CSR 已由硬件设置。
+当前 sp 指向有效且满足调用约定对齐要求的内核栈。
+
+Post-Condition：
+建立完整的 Trap frame，将其交给 trap() 处理；
+trap() 返回后，进入现有的 __trapret 恢复流程。
+
+实现单元：RESTORE_ALL
+
+Pre-Condition：
+trap() 已返回，当前 sp 指向完整且布局正确的 Trap frame。
+其中的 epc 等状态可能已经被处理函数更新。
+
+Post-Condition：
+根据当前 Trap frame 恢复通用寄存器、sstatus 和 sepc，
+恢复原始 sp，使后续已有的 sret 能够正确返回。
+```
+
+### 三、实现与验证过程
+
+本模块使用一版最终提示词完成代码生成。生成后进行了相应测试验证，未发现需要修正的实现问题。
+
+| 阶段 | 实际操作 | 结果 |
+|------|----------|------|
+| 首次生成 | 补全 `RESTORE_ALL`，在 `__alltraps` 中通过 `a0` 传递现场地址并调用 `trap()` | 两处标记均填写学号 2413497，已有保存与返回流程保持不变 |
+| 评分验证 | 执行 `make grade` | 上下文与断点返回 35/35、非法指令处理 25/25、持续时钟中断 40/40，总分 100/100 |
+| 普通启动 | 编译普通版本并运行 QEMU | 内存分配自检通过，连续输出三次 `100 ticks` 后正常关机 |
+
+**关键体会：** 提示词需要明确当前 `sp` 与原始 `sp` 的区别，以及处理函数可能修改 EPC。恢复现场应以处理后的 Trap frame 为准。
 
 ---
 
