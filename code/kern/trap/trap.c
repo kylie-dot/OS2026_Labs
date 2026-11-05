@@ -152,6 +152,32 @@ void interrupt_handler(struct trapframe *tf) {
     }
 }
 
+//lab3 function2 2410690: exception classification and EPC advance
+void exception_handler(struct trapframe *tf) {
+    switch (tf->cause) {
+    case CAUSE_ILLEGAL_INSTRUCTION:
+    case CAUSE_BREAKPOINT: {
+        if (tf->cause == CAUSE_ILLEGAL_INSTRUCTION) {
+            cprintf("Illegal instruction at %p\n", (void *)tf->epc);
+        } else {
+            cprintf("Breakpoint at %p\n", (void *)tf->epc);
+        }
+
+        /*
+         * Lab scope: readable instruction memory, 16/32-bit instructions.
+         * Read a halfword because a compressed instruction is only 2 bytes
+         * and a 32-bit instruction may start at a 2-byte-aligned address.
+         */
+        uint16_t insn = *(const volatile uint16_t *)tf->epc;
+        tf->epc += ((insn & 0x3) == 0x3) ? 4 : 2;
+        break;
+    }
+    default:
+        print_trapframe(tf);
+        break;
+    }
+}
+
 static inline void trap_dispatch(struct trapframe *tf) {
     if ((intptr_t)tf->cause < 0) {
         // interrupts
