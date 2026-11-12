@@ -258,13 +258,54 @@ struct Page *get_page(pde_t *pgdir, uintptr_t la, pte_t **ptep_store)
     return NULL;
 }
 
-//LAB4 function1 YOUR CODE
+//LAB4 function1 2413497
 
+// 撤销一个有效的末级映射；先清除旧翻译，再允许分配器回收物理页。
+static void page_remove_pte(pde_t *pgdir, uintptr_t la, pte_t *ptep)
+{
+    struct Page *page = pte2page(*ptep);
+    *ptep = 0;
+    tlb_invalidate(pgdir, la);
+    if (page_ref_dec(page) == 0)
+    {
+        free_page(page);
+    }
+}
 
+int page_insert(pde_t *pgdir, struct Page *page, uintptr_t la, uint32_t perm)
+{
+    pte_t *ptep = get_pte(pgdir, la, 1);
+    if (ptep == NULL)
+    {
+        // 页表分配失败时，传入的数据页仍由调用者持有。
+        return -E_NO_MEM;
+    }
 
+    // 同页重映射只更新权限，不改变引用计数或回收该页。
+    if (!(*ptep & PTE_V) || pte2page(*ptep) != page)
+    {
+        page_ref_inc(page);
+        if (*ptep & PTE_V)
+        {
+            page_remove_pte(pgdir, la, ptep);
+        }
+    }
 
+    // 重新构造整个页表项，确保撤销的权限位不会残留。
+    *ptep = pte_create(page2ppn(page), perm);
+    tlb_invalidate(pgdir, la);
+    return 0;
+}
 
-
+void page_remove(pde_t *pgdir, uintptr_t la)
+{
+    // 仅查找已有页表，缺失映射时不分配或回收上层页表页。
+    pte_t *ptep = get_pte(pgdir, la, 0);
+    if (ptep != NULL && (*ptep & PTE_V))
+    {
+        page_remove_pte(pgdir, la, ptep);
+    }
+}
 
 // invalidate a TLB entry, but only if the page tables being
 // edited are the ones currently in use by the processor.
