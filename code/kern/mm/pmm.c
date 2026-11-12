@@ -87,7 +87,45 @@ size_t nr_free_pages(void)
     return ret;
 }
 
-//lab2 请补充你在lab2中的代码
+// Lab2: 从设备树获取物理内存范围，初始化页描述符和空闲区。
+static void page_init(void)
+{
+    extern char end[];
+
+    uint64_t base = get_memory_base();
+    uint64_t size = get_memory_size();
+    if (base == 0 || size == 0)
+    {
+        panic("page_init: invalid memory info from dtb\n");
+    }
+
+    va_pa_offset = PHYSICAL_MEMORY_OFFSET;
+    uintptr_t mem_end = base + size;
+    uintptr_t limit = PADDR(KERNTOP);
+    if (mem_end > limit)
+    {
+        mem_end = limit;
+    }
+    npage = PPN(mem_end);
+    pages = (struct Page *)ROUNDUP((uintptr_t)end, PGSIZE);
+
+    // 内核镜像和页描述符数组占用的物理页保留给内核。
+    for (size_t i = 0; i < npage - nbase; i++)
+    {
+        SetPageReserved(pages + i);
+    }
+
+    uintptr_t freemem = ROUNDUP(PADDR(pages + (npage - nbase)), PGSIZE);
+    size_t nfree = 0;
+    if (PPN(freemem) < npage)
+    {
+        nfree = npage - PPN(freemem);
+        init_memmap(pa2page(freemem), nfree);
+    }
+
+    cprintf("memory: base = 0x%016lx, size = 0x%016lx\n", base, size);
+    cprintf("free memory: start = 0x%016lx, pages = %lu\n", freemem, nfree);
+}
 
 static void enable_paging(void)
 {
