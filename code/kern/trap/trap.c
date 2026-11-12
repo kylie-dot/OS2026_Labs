@@ -84,9 +84,94 @@ void print_regs(struct pushregs *gpr)
 extern struct mm_struct *check_mm_struct;
 
 //lab3 请补充你在lab3中的代码
+//lab3 function2 2411333
 
+/* interrupt_handler - 处理时钟及其他中断。
+ * tf->cause 保存的是 scause：RV64 中最高位是中断标志，其余位才是原因编号；
+ * 测试代码也可能直接传入不带最高位的原因编号，因此只清除最高位再比较。 */
+void interrupt_handler(struct trapframe *tf) {
+    uintptr_t cause = tf->cause & ~((uintptr_t)1 << 63);
+    switch (cause) {
+    case IRQ_U_SOFT:
+        cprintf("User software interrupt\n");
+        break;
+    case IRQ_S_SOFT:
+        cprintf("Supervisor software interrupt\n");
+        break;
+    case IRQ_H_SOFT:
+        cprintf("Hypervisor software interrupt\n");
+        break;
+    case IRQ_M_SOFT:
+        cprintf("Machine software interrupt\n");
+        break;
+    case IRQ_U_TIMER:
+        cprintf("User timer interrupt\n");
+        break;
+    case IRQ_S_TIMER:
+        // 先预约下一次时钟事件，再累计 ticks
+        clock_set_next_event();
+        ticks++;
+        if (ticks % TICK_NUM == 0) {
+            print_ticks();
+        }
+        break;
+    case IRQ_H_TIMER:
+        cprintf("Hypervisor timer interrupt\n");
+        break;
+    case IRQ_M_TIMER:
+        cprintf("Machine timer interrupt\n");
+        break;
+    case IRQ_U_EXT:
+        cprintf("User external interrupt\n");
+        break;
+    case IRQ_S_EXT:
+        cprintf("Supervisor external interrupt\n");
+        break;
+    case IRQ_H_EXT:
+        cprintf("Hypervisor external interrupt\n");
+        break;
+    case IRQ_M_EXT:
+        cprintf("Machine external interrupt\n");
+        break;
+    case IRQ_COP:
+        cprintf("Coprocessor interrupt\n");
+        break;
+    case IRQ_HOST:
+        cprintf("Host interrupt\n");
+        break;
+    default:
+        // 未知中断：先输出原因编号，再输出完整 Trap frame
+        cprintf("Unknown interrupt: cause %llu\n", cause);
+        print_trapframe(tf);
+        break;
+    }
+}
 
+//lab3 function2 2410690: exception classification and EPC advance
+void exception_handler(struct trapframe *tf) {
+    switch (tf->cause) {
+    case CAUSE_ILLEGAL_INSTRUCTION:
+    case CAUSE_BREAKPOINT: {
+        if (tf->cause == CAUSE_ILLEGAL_INSTRUCTION) {
+            cprintf("Illegal instruction at %p\n", (void *)tf->epc);
+        } else {
+            cprintf("Breakpoint at %p\n", (void *)tf->epc);
+        }
 
+        /*
+         * Lab scope: readable instruction memory, 16/32-bit instructions.
+         * Read a halfword because a compressed instruction is only 2 bytes
+         * and a 32-bit instruction may start at a 2-byte-aligned address.
+         */
+        uint16_t insn = *(const volatile uint16_t *)tf->epc;
+        tf->epc += ((insn & 0x3) == 0x3) ? 4 : 2;
+        break;
+    }
+    default:
+        print_trapframe(tf);
+        break;
+    }
+}
 /* *
  * trap - handles or dispatches an exception/interrupt. if and when trap()
  * returns,
