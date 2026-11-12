@@ -112,81 +112,113 @@ void proc_init(void);
 
 #### 最终提示词
 
-以下是经过迭代优化后，最终成功实现该功能的提示词：
+以下是首轮在 VS Code 中发送给 Codex 的完整提示词。第二轮的修正提示词见 Lab4-B-prompt.md。
 
 ````markdown
 
-[TASK]
-基于小组 Lab4 框架，协助我逐步完成 code/kern/process/proc.c 的 LAB4 function2。
-先核对实际源码和函数依赖，再按 PCB 初始化、首次运行现场、创建与登记、启动初始化的顺序给出实现。
+[PROMPT]
+任务
+你正在操作 kylie-dot/OS2026_Labs 的 RISC-V uCore 教学内核。请在当前工作区直接修改 code/kern/process/proc.c，一次完成 Lab4 功能模块二“进程创建及初始化”。工作区应基于小组的 Lab4 框架提交 a211d8d，目标文件应有 LAB4 function2 YOUR CODE 标记。先检查当前分支、工作区和文件内容。如果当前版本不是该框架、模块已经实现，或目标区域含有他人的改动，请说明情况并停下，保留已有工作。
 
+操作要求
+在 function2 标记下新增下列六个函数，将标记改为 //LAB4 function2 2410690。
+仅编辑 proc.c 的 function2 区域及该文件必要的 include 和 extern 声明。保留 function3 标记、现有辅助函数、结构体、公共签名、Trap 与调度实现、测试和构建脚本。优先使用项目现有接口。
+
+输出要求
+直接编辑实际文件并审查 diff。完成后说明修改位置、线程首次运行路径、失败清理顺序以及仍需验证的项目。编译、QEMU、评分与截图由我完成。不要代为提交或推送 Git，也不要声称未经执行的测试通过。
 
 [RELY]
-以 proc.h 的 proc_struct 和 context、trap.h 的 trapframe 和 pushregs 为准。
-依据 entry.S 确认 s0 保存线程函数地址，s1 保存参数。依据 trapentry.S 确认
-forkrets 将 sp 指向传入的 Trap 帧，随后通过 __trapret 恢复现场并执行 sret。
-使用框架已有的 boot_pgdir_pa、bootstack、KSTACKSIZE、CLONE_VM、
-setup_kstack、put_kstack、get_pid、hash_proc、wakeup_proc 和中断保存/恢复接口。
-从 riscv.h 使用 read_csr 和 SSTATUS 位定义。
+从仓库根目录读取：
+- code/kern/process/proc.c、proc.h、entry.S
+- code/kern/trap/trap.h、trapentry.S
+- code/kern/schedule/sched.c、sched.h，及 switch_to 的实际汇编实现或待实现位置
+- code/kern/mm/pmm.h、memlayout.h、kmalloc.h
+- code/kern/sync/sync.h、code/libs/riscv.h、list.h、error.h
+- code/kern/init/init.c、entry.S 和 code/tools/test_lab4.c
+
+以实际声明核对 bootstack、boot_pgdir_pa、KSTACKSIZE、CLONE_VM、MAX_PROCESS、错误码和中断保存/恢复接口。使用已有的 setup_kstack、put_kstack、get_pid、hash_proc、find_proc、wakeup_proc 与 forkret。核对 entry.S 中 move a0, s1 和 jalr s0，以及 forkrets 将传入指针交给 __trapret 的约定。需要读取 sstatus 时显式引入声明 read_csr 和 SSTATUS 位的头文件。
+
+[GUARANTEE]
+实现以下函数并保留给定接口：
+static struct proc_struct *alloc_proc(void);
+int kernel_thread(int (*fn)(void *), void *arg, uint32_t clone_flags);
+static void copy_thread(struct proc_struct *proc, uintptr_t stack, struct trapframe *tf);
+static int copy_mm(uint32_t clone_flags, struct proc_struct *proc);
+int do_fork(uint32_t clone_flags, uintptr_t stack, struct trapframe *tf);
+void proc_init(void);
 
 [SPECIFICATION]
-实现 alloc_proc、kernel_thread、copy_thread、copy_mm、do_fork 和 proc_init。
-新 PCB 处于 PROC_UNINIT，PID 为 -1，使用启动页表。新线程的 Trap 帧位于
-自己的内核栈上，首次切换进入 forkret。当前阶段保留 copy_mm 接口。
-分配失败时返回负错误码并释放已取得的资源。PID 分配、登记和计数更新置于
-同一个关中断区间，登记完成后再唤醒。先将 idleproc 设为 current，再创建 initproc。
-给出逐步验证方法。若整机构建受其他模块阻塞，先用 Makefile 单独编译 proc.o，
-并根据实际终端输出记录验证状态。
+实现单元：alloc_proc
+Pre-Condition：kmalloc 与启动页表已就绪。
+Post-Condition：分配失败返回 NULL。成功时初始化全部 PCB 字段，设置 state=PROC_UNINIT、pid=-1、pgdir=boot_pgdir_pa，mm、parent、tf 等指针为空。运行次数、栈地址、调度标记、flags、名称和 context 清零。分别初始化 list_link 与 hash_link，PCB 此时未登记到全局结构。
+
+实现单元：kernel_thread
+Pre-Condition：fn 是有效的内核线程入口，调用方已建立 current。
+Post-Condition：创建并清零临时 Trap 帧，s0 存 fn、s1 存 arg，epc 指向 kernel_thread_entry。根据当前 sstatus 设置 SPP 和 SPIE、清除 SIE，使 sret 回到 S 模式。调用 do_fork(clone_flags | CLONE_VM, 0, &tf)，返回其结果。
+
+实现单元：copy_thread
+Pre-Condition：新 PCB 的内核栈已由 setup_kstack 分配，tf 指向有效模板。
+Post-Condition：在新内核栈顶部预留并复制完整 Trap 帧，令 proc->tf 指向副本。将副本的 a0 置为 0。stack 为 0 时，将副本的 gpr.sp 设为帧地址；否则使用 stack。context.ra 指向 forkret，context.sp 指向帧地址。首次切换应能走 forkret → forkrets → __trapret → sret → kernel_thread_entry。
+
+实现单元：copy_mm
+Pre-Condition：当前实验创建内核线程，PCB 已完成默认初始化。
+Post-Condition：保留接口并返回 0，内核线程继续共享启动页表，mm 保持 NULL。避免新增用户地址空间复制逻辑。
+
+实现单元：do_fork
+Pre-Condition：current、进程链表和 PID 哈希桶已经初始化，tf 指向有效模板。
+Post-Condition：
+1. 达到 MAX_PROCESS 时返回 -E_NO_FREE_PROC；PCB 分配失败时返回 -E_NO_MEM。
+2. 设置父进程为 current，依次准备内核栈、地址空间接口和运行现场。内核栈分配失败时释放 PCB。copy_mm 失败时先释放内核栈再释放 PCB，返回对应错误。失败路径不能将 PCB 留在全局结构中或增加进程计数。
+3. 在同一个本地关中断区间内分配唯一 PID、登记哈希表和 proc_list，并更新 nr_process。按原状态恢复中断。完成登记后调用 wakeup_proc，返回新 PID。
+
+实现单元：proc_init
+Pre-Condition：由启动路径调用一次，bootstack 与启动页表已建立。
+Post-Condition：初始化进程链表和全部哈希桶。创建 idleproc，设 PID 为 0、状态为 PROC_RUNNABLE，复用 bootstack，置 need_resched，计入 nr_process 并设为 current。idleproc 无需进入普通 PID 哈希表。再调用 kernel_thread 创建运行 init_main 的 initproc；创建失败须按框架方式报错。用返回的 PID 通过 find_proc 取回 initproc 并设置名称。线程名称为 idle 和 init，复制时包含结尾 NUL，避免用固定长度从短字符串字面量越界读取。演示参数使用 Hello world!!，若框架测试明确指定其他参数，以测试要求为准。
 
 ````
 
 #### 实现迭代过程
 
-本模块的实现经历了 [3] 次迭代，过程如下：
+本模块的实现经历了 [2] 次迭代，过程如下：
 
 ---
 
 ##### 第一次迭代
 
 **遇到的问题：**
-最初按 alloc_proc() 的函数签名搜索源码，终端没有返回结果。查看完整的 proc.c 后发现，框架只提供了 LAB4 function2 YOUR CODE 标记，需要在该位置新增函数。
+1. Codex 无法解析独立工作区的 .git worktree 指针，因此无法自行核对 Git 基线和变更范围。
+
+2. 首轮生成的代码通过了单文件编译，但人工审查发现，kernel_thread() 仅在 SSTATUS_SPP 已经为 1 时才再次置位。若读出的 SPP 为 0，首次执行 sret 时就无法保证返回 S 模式。
 
 **问题解决策略：**
-在提示词的 [RELY] 中补充实际的 proc.c 和 proc.h，明确以 LAB4 function2 标记定位实现区域。根据 proc_struct 的实际字段编写 alloc_proc()，并核对 boot_pgdir_pa 和 list_init() 的声明后再初始化 PCB。
+1. 在 VS Code 中打开基于框架提交 a211d8d 创建的独立工作区，将完整提示词一次性发送给 Codex。Codex 根据 proc.c 中的 LAB4 function2 YOUR CODE 标记完成六个函数的实现，随后由本人在 WSL 中核对 Git 基线和修改范围。
+
+2. 执行 git diff --check 和 make -B -C code obj/kern/process/proc.o，检查补丁格式并强制重编译目标文件。编译通过后，对照首次运行所需的寄存器状态审查代码，将 SPP 的条件置位问题列为下一轮修正项。
 
 ##### 第二次迭代
 
 **遇到的问题：**
-1. 仅看 C 语言接口，无法确定新线程首次运行时，函数地址和参数应放在哪些寄存器里。
+1. 需要修正 kernel_thread() 中的 sstatus 初始化，保证新建内核线程首次执行 sret 时进入 S 模式。
 
-2. 审查 set_proc_name() 时发现，它会从传入地址固定复制 PROC_NAME_LEN 个字节。直接传入 "idle" 或 "init" 会读出字符串字面量的边界。
+2. 首轮生成的 proc_init() 将 idleproc 加入了 proc_list，需要结合 PID 分配、调度和测试代码核对这一处理。
 
-**问题解决策略：**
-1. 在 [RELY] 中补充 entry.S、trapentry.S 和 trap.h。根据 move a0, s1 和 jalr s0，在 kernel_thread() 中将函数地址存入 s0、参数存入 s1。在 copy_thread() 中把 Trap 帧复制到新线程的内核栈，并将切换上下文的返回地址设为 forkret。
-
-2. 在 [SPECIFICATION] 中明确线程名称按实际字符串长度复制，并包含结尾的 \0。在 proc_init() 中分别使用 sizeof("idle") 和 sizeof("init") 作为复制长度。
-
-##### 第三次迭代
-
-**遇到的问题：**
-1. 执行 make -C code 时，编译在 kern/trap/trap.c 处中止。trap() 调用 interrupt_handler() 和 exception_handler() 时，编译器在调用处看不到这两个函数的声明。整机构建尚未编译到 proc.c。
 
 **问题解决策略：**
-1. 在提示词中补充验证步骤。整机构建受其他模块阻塞时，先通过项目 Makefile 单独构建 B 模块，再用 -B 强制重新编译，确认结果来自本次构建。实际执行了 make -B -C code obj/kern/process/proc.o，编译通过。
+1. 向 Codex 发送修正提示词，限定修改范围为 proc.c 的 function2 区域。Codex 将条件置位改为 tf.status |= SSTATUS_SPP;，同时保留 SPIE 置位与 SIE 清零。
+
+2。 要求 Codex 对照 get_pid()、调度器和 test_lab4.c 复核 idleproc 的登记方式。复核后保留 idleproc 在 proc_list 中的登记，PID 哈希表中未登记 idleproc。这一处理仍需结合整机调度验证。
+
+
 
 
 **最终结果：**
 
-经过 [3] 次迭代，该模块最终：
-- ✅ 完成 alloc_proc()、kernel_thread()、copy_thread()、copy_mm()、do_fork() 和 proc_init() 的实现。
-- ✅ git diff --check 检查通过，proc.c 单独编译及强制重新编译均通过。
-- ✅ 代码已推送至 lab4-wangruiyu 分支，提交号为 058c72e。
-- ⏳ initproc 首次运行、资源分配失败后的清理以及整机评分仍待实测。
+**最终结果**
 
-**关键改进点总结（如有）：**
-1. 在 [RELY] 中补充实际的源码标记、数据结构和汇编入口，明确 C 代码与汇编之间的寄存器约定。
-2. 在 [SPECIFICATION] 中明确 Trap 帧的位置、线程名称的复制长度，以及 do_fork() 在不同失败阶段需要释放的资源。
-3. 通过 Makefile 单独验证 proc.o，并将首次运行和失败清理保留为后续的运行验收项。
+经过 2 次 Codex 迭代，完成了 `alloc_proc()`、`kernel_thread()`、`copy_thread()`、`copy_mm()`、`do_fork()` 和 `proc_init()`。第二轮将 `SSTATUS_SPP` 改为无条件置位，修正版用于正式提交 `40e9808`。
+
+在 WSL 中执行 `git diff --check`，未发现补丁格式问题。执行 `make -B -C code obj/kern/process/proc.o`，强制重编译通过。QEMU 首次调度和 `make grade` 结果待小组合并后补充。
+
 
 
 ### 练习：[练习标题]
