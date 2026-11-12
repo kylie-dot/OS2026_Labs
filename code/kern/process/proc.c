@@ -220,22 +220,18 @@ init_main(void *arg)
 }
 
 //LAB4 function2 2410690
+
 static struct proc_struct *
 alloc_proc(void)
 {
-    struct proc_struct *proc = kmalloc(sizeof(*proc));
-    if (proc == NULL)
-    {
-        return NULL;
-    }
-
+    struct proc_struct *proc = kmalloc(sizeof(struct proc_struct));
+    if (proc == NULL) return NULL;
     memset(proc, 0, sizeof(*proc));
     proc->state = PROC_UNINIT;
     proc->pid = -1;
     proc->pgdir = boot_pgdir_pa;
     list_init(&proc->list_link);
     list_init(&proc->hash_link);
-
     return proc;
 }
 
@@ -244,70 +240,49 @@ kernel_thread(int (*fn)(void *), void *arg, uint32_t clone_flags)
 {
     struct trapframe tf;
     memset(&tf, 0, sizeof(tf));
-
     tf.gpr.s0 = (uintptr_t)fn;
     tf.gpr.s1 = (uintptr_t)arg;
-    tf.status = (read_csr(sstatus) | SSTATUS_SPP | SSTATUS_SPIE)
-                & ~SSTATUS_SIE;
     tf.epc = (uintptr_t)kernel_thread_entry;
-
+    tf.status = read_csr(sstatus);
+    tf.status |= SSTATUS_SPP;
+    tf.status |= SSTATUS_SPIE;
+    tf.status &= ~SSTATUS_SIE;
     return do_fork(clone_flags | CLONE_VM, 0, &tf);
 }
 
 static void
 copy_thread(struct proc_struct *proc, uintptr_t stack, struct trapframe *tf)
 {
-    proc->tf = (struct trapframe *)(proc->kstack + KSTACKSIZE) - 1;
-    *proc->tf = *tf;
-
-    proc->tf->gpr.a0 = 0;
-    proc->tf->gpr.sp = (stack == 0) ? (uintptr_t)proc->tf : stack;
+    uintptr_t tf_addr = proc->kstack + KSTACKSIZE - sizeof(struct trapframe);
+    struct trapframe *dst = (struct trapframe *)tf_addr;
+    *dst = *tf;
+    dst->gpr.a0 = 0;
+    dst->gpr.sp = stack ? stack : tf_addr;
+    proc->tf = dst;
     proc->context.ra = (uintptr_t)forkret;
-    proc->context.sp = (uintptr_t)proc->tf;
+    proc->context.sp = tf_addr;
 }
-
 
 static int
 copy_mm(uint32_t clone_flags, struct proc_struct *proc)
 {
     (void)clone_flags;
-    (void)proc;
+    proc->mm = NULL;
     return 0;
 }
 
 int
 do_fork(uint32_t clone_flags, uintptr_t stack, struct trapframe *tf)
 {
-    if (nr_process >= MAX_PROCESS)
-    {
-        return -E_NO_FREE_PROC;
-    }
-
+    if (nr_process >= MAX_PROCESS) return -E_NO_FREE_PROC;
     struct proc_struct *proc = alloc_proc();
-    if (proc == NULL)
-    {
-        return -E_NO_MEM;
-    }
-
+    if (proc == NULL) return -E_NO_MEM;
     proc->parent = current;
-
     int ret = setup_kstack(proc);
-    if (ret != 0)
-    {
-        kfree(proc);
-        return ret;
-    }
-
+    if (ret != 0) { kfree(proc); return ret; }
     ret = copy_mm(clone_flags, proc);
-    if (ret != 0)
-    {
-        put_kstack(proc);
-        kfree(proc);
-        return ret;
-    }
-
+    if (ret != 0) { put_kstack(proc); kfree(proc); return ret; }
     copy_thread(proc, stack, tf);
-
     bool intr_flag;
     local_intr_save(intr_flag);
     proc->pid = get_pid();
@@ -315,7 +290,6 @@ do_fork(uint32_t clone_flags, uintptr_t stack, struct trapframe *tf)
     list_add(&proc_list, &proc->list_link);
     nr_process++;
     local_intr_restore(intr_flag);
-
     wakeup_proc(proc);
     return proc->pid;
 }
@@ -323,36 +297,28 @@ do_fork(uint32_t clone_flags, uintptr_t stack, struct trapframe *tf)
 void
 proc_init(void)
 {
+    char idle_name[PROC_NAME_LEN + 1] = {0};
+    char init_name[PROC_NAME_LEN + 1] = {0};
+    memcpy(idle_name, "idle", sizeof("idle") - 1);
+    memcpy(init_name, "init", sizeof("init") - 1);
     list_init(&proc_list);
-    for (size_t i = 0; i < HASH_LIST_SIZE; i++)
-    {
-        list_init(&hash_list[i]);
-    }
-
+    for (int i = 0; i < HASH_LIST_SIZE; i++) list_init(&hash_list[i]);
     idleproc = alloc_proc();
-    if (idleproc == NULL)
-    {
-        panic("cannot allocate idleproc.\n");
-    }
-
+    assert(idleproc != NULL);
     idleproc->pid = 0;
     idleproc->state = PROC_RUNNABLE;
     idleproc->kstack = (uintptr_t)bootstack;
     idleproc->need_resched = 1;
-    memcpy(idleproc->name, "idle", sizeof("idle"));
-    nr_process++;
-
+    set_proc_name(idleproc, idle_name);
+    list_add(&proc_list, &idleproc->list_link);
+    nr_process = 1;
     current = idleproc;
-
     int pid = kernel_thread(init_main, "Hello world!!", 0);
-    if (pid < 0)
-    {
-        panic("cannot create initproc: %d.\n", pid);
-    }
-
+    assert(pid > 0);
     initproc = find_proc(pid);
     assert(initproc != NULL);
-    memcpy(initproc->name, "init", sizeof("init"));
+    set_proc_name(initproc, init_name);
 }
+
 
 //LAB4 function3 YOUR CODE
