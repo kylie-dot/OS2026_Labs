@@ -1,5 +1,81 @@
 # Lab 4 提示词汇总
 
+## 功能模块一：虚拟内存页操作
+
+**负责人：** 2413497-姚嘉乐
+
+### 最终提示词
+
+```text
+[PROMPT]
+任务：
+在code/kern/mm/pmm.c中实现 page_insert() 和 page_remove()，用于建立、替换和撤销 Sv39 的 4 KiB 页映射。
+
+操作要求：
+在工作区的实际源码中补全 //LAB4 function1 YOUR CODE 所在区域，将标记改为 //LAB4 function1 2413497。编辑范围限于该区域，沿用现有函数声明、页表查找逻辑和物理页分配器。需要共用的辅助函数可以定义为本文件的 static 函数。
+
+输出要求：
+直接进行文件操作，使用下面[RELY]、[GUARANTEE]、 [SPECIFICATION]部分的信息。积极合理的使用注释，维护代码的可读性。
+
+[RELY]
+请先阅读code/kern/mm/pmm.c和code/kern/mm/pmm.h。
+
+- 查找页表项。get_pte(pgdir, la, 1) 可以创建缺少的下级页表，传 0 则只查找。
+  返回 NULL 表示没找到末级项。返回指针时，用 *ptep & PTE_V 判断该项是否有效。
+  只读查询也可以用 get_page()，它返回已映射的物理页描述符，并可通过ptep_store 输出末级页表项的地址。
+- 读写映射。用 pte_create(page2ppn(page), perm) 构造新页表项，它会设置 PTE_V。用 pte2page(*ptep) 取得有效页表项对应的旧页。
+- 管理物理页。page_ref_inc() 和 page_ref_dec() 更新引用计数。
+  page_ref_dec() 返回减一后的计数，free_page() 将一页归还分配器。
+- 修改末级页表项后，调用 tlb_invalidate(pgdir, la)。
+- 常量。PTE_V 定义在 mmu.h，E_NO_MEM 定义在 error.h。
+
+[GUARANTEE]
+
+实现以下两个公开接口，签名与 pmm.h 一致。
+
+int page_insert(pde_t *pgdir, struct Page *page, uintptr_t la, uint32_t perm);
+void page_remove(pde_t *pgdir, uintptr_t la);
+
+[SPECIFICATION]
+
+实现单元一  page_insert()
+
+Pre-Condition
+物理内存管理已初始化。pgdir 指向有效的 Sv39 根页表。la 位于可使用末级页表项的 4 KiB 映射范围内。page 是已分配或已被其他地址映射的物理页。
+
+Post-Condition
+成功时返回 0。目标虚拟页指向 page，页表项按传入的 perm 构造。被撤销的旧映射及其引用计数得到正确处理。
+
+Case 1  末级项原本为空
+建立映射，目标物理页的引用计数增加一次。
+
+Case 2  原映射指向同一物理页
+更新页表项的权限。物理页号、引用计数和空闲页数保持原值。
+
+Case 3  原映射指向另一物理页
+新页增加一次引用，旧页减少一次引用。旧页仍有引用时继续保留，归零时归还分配器。
+
+Case 4  无法分配所需的页表页
+返回 -E_NO_MEM。目标数据页的映射和引用计数均未改变，调用者仍负责传入的 page。get_pte() 已挂接的上层页表沿用框架的管理方式。
+
+Requirements
+每次成功写入末级项后，同步该虚拟地址的 TLB。回收旧页前，确保旧页表项和旧翻译均已失效。权限按 perm 重新构造，旧权限中被撤销的位应清除。
+
+实现单元二  page_remove()
+
+Pre-Condition
+pgdir 指向有效的 Sv39 根页表。la 位于可使用末级页表项的 4 KiB 映射范围内，目标映射可以存在或缺失。
+
+Post-Condition
+目标虚拟页的映射被撤销。其他虚拟页的映射和上层页表页继续有效。
+
+Case 1  页表路径缺失或末级项无效
+直接返回，页表、引用计数和空闲页数保持原值。对同一地址重复删除也应满足这个行为。
+
+Case 2  末级项有效
+先取得旧物理页，再清空末级项并同步该地址的 TLB。旧页引用减少一次，计数归零时调用 free_page()。
+```
+
 ## 功能模块三：进程调度
 
 **负责人：** 2411333-吴卓彦
