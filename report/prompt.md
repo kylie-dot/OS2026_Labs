@@ -4,7 +4,26 @@
 
 **负责人：** 2413497-姚嘉乐
 
-### 最终提示词
+### 一、Spec（设计依据）
+
+**1. 输入与调用条件**
+
+- 先根据 `pmm.c` 中的 `get_pte()` 和 `pmm.h` 的接口声明确定输入。`pgdir` 指向 Sv39 根页表，`la` 可以带页内偏移，两个函数操作的是该地址所在的 4 KiB 页。`page_insert()` 接收调用者已取得的物理页描述符和权限位。
+- `get_pte()` 返回的是末级项的地址。查表路径缺失和末级项的 `PTE_V` 未置位是两种状态。插入时允许按需分配下级页表，删除时只查找已有路径。
+
+**2. 输出与处理过程**
+
+- 按末级项原来的状态列出插入的预期结果。空项新增一次引用，同页重映射只更新权限，异页替换把引用从旧页移到新页。分配所需的页表页失败时返回 `-E_NO_MEM`，传入数据页仍由调用者持有。
+- 对有效映射执行删除时，先撤销映射并刷新该地址的 TLB，再归还引用归零的物理页。路径缺失、末级项为空和重复删除都直接返回。覆盖旧映射时按本次 `perm` 构造新项，以清除被撤销的权限位。
+
+**3. 修改范围与验收**
+
+- 修改范围是 `pmm.c` 中的 `LAB4 function1`。沿用现有页表遍历和物理页分配器，补齐 `page_insert()` 和 `page_remove()`。
+- 整合使用make qemu和make grade做全面的检查，过程再重点核对同页重映射时空闲页数是否保持原值，以及重复删除是否只撤销一次引用。
+
+### 二、最终提示词
+
+按 Lab0.5 的四段式组织提示词。`[PROMPT]` 写明实现位置、修改范围和学号标记，`[RELY]` 列出查表、页号转换、引用计数和 TLB 接口，`[GUARANTEE]` 给出两个函数签名。`[SPECIFICATION]` 为两个函数分别写前置条件、后置条件和各个分支的预期结果。
 
 ```text
 [PROMPT]
@@ -75,6 +94,58 @@ Case 1  页表路径缺失或末级项无效
 Case 2  末级项有效
 先取得旧物理页，再清空末级项并同步该地址的 TLB。旧页引用减少一次，计数归零时调用 free_page()。
 ```
+
+## 功能模块二：进程创建及初始化
+
+**负责人：** 2410690-王睿瑜
+
+### 一、Spec（设计依据）
+
+**1. 输入与调用条件**
+
+- 根据 `proc.h` 确定 PCB 和切换上下文的字段，根据 `trap.h` 确定 Trap 帧布局。`proc_init()` 在内存管理初始化完成后建立进程管理结构，`do_fork()` 依赖已有的 `current` 和登记结构。
+- 对照线程入口的 `move a0, s1` 和 `jalr s0`，确定 `s0` 保存线程函数地址，`s1` 保存参数。对照 `forkrets` 和 `__trapret`，确定新线程的 Trap 帧放在它自己的内核栈上，切换上下文从 `forkret` 开始。
+
+**2. 输出与处理过程**
+
+- `alloc_proc()` 建立初始 PCB，状态为 `PROC_UNINIT`，PID 为 `-1`，页表根使用 `boot_pgdir_pa`。本阶段的内核线程共享内核地址空间，`copy_mm()` 保留接口。
+- `do_fork()` 先准备 PCB、内核栈和首次运行现场，再在关中断区间内分配 PID、登记链表和哈希表、更新进程数。登记完成后唤醒新线程并返回 PID。分配失败时释放已取得的资源，返回对应的负错误码。
+- `proc_init()` 先把复用启动栈的 `idleproc` 设为 `current`，再通过 `kernel_thread()` 创建运行 `init_main()` 的 `initproc`。
+
+**3. 修改范围与验收**
+
+- 修改范围是 `proc.c` 中的 `LAB4 function2`，实现 PCB 分配、线程现场准备、创建与登记以及启动初始化所需的六个函数。
+- 整机构建受其他模块阻塞时，先用 `make -B -C code obj/kern/process/proc.o` 检查本模块能否编译。集成后用 `make qemu` 核对 `initproc` 的输出，并通过 `make grade` 的进程创建用例检查两个线程的初始状态。
+
+### 二、最终提示词
+
+实际提示词用 `[TASK]` 确定修改位置和实现顺序，`[RELY]` 列出结构体、汇编入口和已有辅助函数。`[SPECIFICATION]` 同时列出六个实现接口，并说明首次运行现场、资源分配失败、登记和唤醒的要求。为便于在其他模块未完成时验证，还写明了单独编译 `proc.o` 的方式。
+
+````markdown
+
+[TASK]
+基于小组 Lab4 框架，协助我逐步完成 code/kern/process/proc.c 的 LAB4 function2。
+先核对实际源码和函数依赖，再按 PCB 初始化、首次运行现场、创建与登记、启动初始化的顺序给出实现。
+
+
+[RELY]
+以 proc.h 的 proc_struct 和 context、trap.h 的 trapframe 和 pushregs 为准。
+依据 entry.S 确认 s0 保存线程函数地址，s1 保存参数。依据 trapentry.S 确认
+forkrets 将 sp 指向传入的 Trap 帧，随后通过 __trapret 恢复现场并执行 sret。
+使用框架已有的 boot_pgdir_pa、bootstack、KSTACKSIZE、CLONE_VM、
+setup_kstack、put_kstack、get_pid、hash_proc、wakeup_proc 和中断保存/恢复接口。
+从 riscv.h 使用 read_csr 和 SSTATUS 位定义。
+
+[SPECIFICATION]
+实现 alloc_proc、kernel_thread、copy_thread、copy_mm、do_fork 和 proc_init。
+新 PCB 处于 PROC_UNINIT，PID 为 -1，使用启动页表。新线程的 Trap 帧位于
+自己的内核栈上，首次切换进入 forkret。当前阶段保留 copy_mm 接口。
+分配失败时返回负错误码并释放已取得的资源。PID 分配、登记和计数更新置于
+同一个关中断区间，登记完成后再唤醒。先将 idleproc 设为 current，再创建 initproc。
+给出逐步验证方法。若整机构建受其他模块阻塞，先用 Makefile 单独编译 proc.o，
+并根据实际终端输出记录验证状态。
+
+````
 
 ## 功能模块三：进程调度
 
