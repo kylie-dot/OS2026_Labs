@@ -193,6 +193,7 @@ Case 2  末级项有效
 #### 实现迭代过程
 
 使用这版提示词完成实现后，验证后确认实现正确，没有出现问题。
+
 ---
 
 ### 功能模块二：[进程创建及初始化]
@@ -501,18 +502,31 @@ Lab4 使用 Sv39。`get_pte()` 的第一段用 `PDX1(la)` 选出根页表项，�
 
 ## 五、测试与验证
 
-<!-- 根据该实验的具体情况，提供完整的测试运行截图，应包含：
-- 编译及运行成功的输出（make qemu），可能有多个
-- 测试通过的结果（make grade），只有一个
--->
+我们在 WSL 的 `code` 目录执行了 `make qemu` 和 `make grade`。普通启动完成了内存自检，`initproc` 成功运行。课程评分的三项测试全部通过，总分为 **30/30**。
 
-**测试截图：**
+### 普通启动与内核线程运行
 
+![执行 make qemu 后的编译输出](./images/lab4-qemu-build.png)
 
+![链接器清理未使用的段并生成内核镜像](./images/lab4-qemu-linker.png)
 
-**功能模块三的整机验证计划（2411333-吴卓彦）**
+前两张图记录了内核的编译与链接过程。编译时，`kmalloc.c` 把整数形式的地址传给了接收 `void *` 的 `kva2page()`，因此出现类型转换警告。我们查阅了对应源码和构建选项，确认该警告未中断本次编译。`removing unused section` 是链接器按构建选项移除未使用段时打印的信息。链接完成后，`objcopy` 生成了内核镜像 `bin/ucore.img`。
 
-待各模块合并后统一运行 `make qemu` 和 `make grade`。普通启动时核对 `initproc` 的名称、PID 和问候输出。评分时核对 `[Test Schedule] PASS`，该用例要求两个测试线程都实际运行。实测输出和截图在联调完成后补录。
+![OpenSBI 启动与 DTB 内存探测](./images/lab4-qemu-boot.png)
+
+![内存自检通过及 initproc 的运行输出](./images/lab4-qemu-self-checks.png)
+
+启动后，内核从设备树中读到了 128 MiB 物理内存。随后，物理页分配自检 `check_alloc_page()`、页表自检 `check_pgdir()` 和启动页表自检 `check_boot_pgdir()` 均通过。`initproc` 以 PID 1 运行，打印了 `Hello world!!` 和结束语，验证了内核线程的创建和首次切换。
+
+### 课程评分
+
+![make grade 注入测试并编译时的类型警告](./images/lab4-grade-warnings.png)
+
+`make grade` 在临时副本中注入课程测试。除上述地址转换警告外，评分代码把返回 `void` 的测试函数传给了要求返回 `int` 的 `kernel_thread()`，因此出现函数指针类型警告。我们对照测试代码和接口声明后确认，这些编译警告未中断本次构建和评分,和我们的代码实现是否正确无关。
+
+![PMM、进程创建和调度三项测试均通过，总分 30/30](./images/lab4-grade-result.png)
+
+评分输出中，`check PMM`、`check Process Create` 和 `check Schedule` 均为 `OK`，每项满分 10 分。三项结果分别验证了页映射与引用计数、内核线程创建，以及两个测试线程都能得到调度并实际运行。
 
 ---
 
