@@ -1,5 +1,202 @@
 # Lab 4 提示词汇总
 
+## 功能模块一：虚拟内存页操作
+
+**负责人：** 2413497-姚嘉乐
+
+### 一、Spec（设计依据）
+
+**1. 输入与调用条件**
+
+- 先根据 `pmm.c` 中的 `get_pte()` 和 `pmm.h` 的接口声明确定输入。`pgdir` 指向 Sv39 根页表，`la` 可以带页内偏移，两个函数操作的是该地址所在的 4 KiB 页。`page_insert()` 接收调用者已取得的物理页描述符和权限位。
+- `get_pte()` 返回的是末级项的地址。查表路径缺失和末级项的 `PTE_V` 未置位是两种状态。插入时允许按需分配下级页表，删除时只查找已有路径。
+
+**2. 输出与处理过程**
+
+- 按末级项原来的状态列出插入的预期结果。空项新增一次引用，同页重映射只更新权限，异页替换把引用从旧页移到新页。分配所需的页表页失败时返回 `-E_NO_MEM`，传入数据页仍由调用者持有。
+- 对有效映射执行删除时，先撤销映射并刷新该地址的 TLB，再归还引用归零的物理页。路径缺失、末级项为空和重复删除都直接返回。覆盖旧映射时按本次 `perm` 构造新项，以清除被撤销的权限位。
+
+**3. 修改范围与验收**
+
+- 修改范围是 `pmm.c` 中的 `LAB4 function1`。沿用现有页表遍历和物理页分配器，补齐 `page_insert()` 和 `page_remove()`。
+- 整合使用make qemu和make grade做全面的检查，过程再重点核对同页重映射时空闲页数是否保持原值，以及重复删除是否只撤销一次引用。
+
+### 二、最终提示词
+
+按 Lab0.5 的四段式组织提示词。`[PROMPT]` 写明实现位置、修改范围和学号标记，`[RELY]` 列出查表、页号转换、引用计数和 TLB 接口，`[GUARANTEE]` 给出两个函数签名。`[SPECIFICATION]` 为两个函数分别写前置条件、后置条件和各个分支的预期结果。
+
+```text
+[PROMPT]
+任务：
+在code/kern/mm/pmm.c中实现 page_insert() 和 page_remove()，用于建立、替换和撤销 Sv39 的 4 KiB 页映射。
+
+操作要求：
+在工作区的实际源码中补全 //LAB4 function1 YOUR CODE 所在区域，将标记改为 //LAB4 function1 2413497。编辑范围限于该区域，沿用现有函数声明、页表查找逻辑和物理页分配器。需要共用的辅助函数可以定义为本文件的 static 函数。
+
+输出要求：
+直接进行文件操作，使用下面[RELY]、[GUARANTEE]、 [SPECIFICATION]部分的信息。积极合理的使用注释，维护代码的可读性。
+
+[RELY]
+请先阅读code/kern/mm/pmm.c和code/kern/mm/pmm.h。
+
+- 查找页表项。get_pte(pgdir, la, 1) 可以创建缺少的下级页表，传 0 则只查找。
+  返回 NULL 表示没找到末级项。返回指针时，用 *ptep & PTE_V 判断该项是否有效。
+  只读查询也可以用 get_page()，它返回已映射的物理页描述符，并可通过ptep_store 输出末级页表项的地址。
+- 读写映射。用 pte_create(page2ppn(page), perm) 构造新页表项，它会设置 PTE_V。用 pte2page(*ptep) 取得有效页表项对应的旧页。
+- 管理物理页。page_ref_inc() 和 page_ref_dec() 更新引用计数。
+  page_ref_dec() 返回减一后的计数，free_page() 将一页归还分配器。
+- 修改末级页表项后，调用 tlb_invalidate(pgdir, la)。
+- 常量。PTE_V 定义在 mmu.h，E_NO_MEM 定义在 error.h。
+
+[GUARANTEE]
+
+实现以下两个公开接口，签名与 pmm.h 一致。
+
+int page_insert(pde_t *pgdir, struct Page *page, uintptr_t la, uint32_t perm);
+void page_remove(pde_t *pgdir, uintptr_t la);
+
+[SPECIFICATION]
+
+实现单元一  page_insert()
+
+Pre-Condition
+物理内存管理已初始化。pgdir 指向有效的 Sv39 根页表。la 位于可使用末级页表项的 4 KiB 映射范围内。page 是已分配或已被其他地址映射的物理页。
+
+Post-Condition
+成功时返回 0。目标虚拟页指向 page，页表项按传入的 perm 构造。被撤销的旧映射及其引用计数得到正确处理。
+
+Case 1  末级项原本为空
+建立映射，目标物理页的引用计数增加一次。
+
+Case 2  原映射指向同一物理页
+更新页表项的权限。物理页号、引用计数和空闲页数保持原值。
+
+Case 3  原映射指向另一物理页
+新页增加一次引用，旧页减少一次引用。旧页仍有引用时继续保留，归零时归还分配器。
+
+Case 4  无法分配所需的页表页
+返回 -E_NO_MEM。目标数据页的映射和引用计数均未改变，调用者仍负责传入的 page。get_pte() 已挂接的上层页表沿用框架的管理方式。
+
+Requirements
+每次成功写入末级项后，同步该虚拟地址的 TLB。回收旧页前，确保旧页表项和旧翻译均已失效。权限按 perm 重新构造，旧权限中被撤销的位应清除。
+
+实现单元二  page_remove()
+
+Pre-Condition
+pgdir 指向有效的 Sv39 根页表。la 位于可使用末级页表项的 4 KiB 映射范围内，目标映射可以存在或缺失。
+
+Post-Condition
+目标虚拟页的映射被撤销。其他虚拟页的映射和上层页表页继续有效。
+
+Case 1  页表路径缺失或末级项无效
+直接返回，页表、引用计数和空闲页数保持原值。对同一地址重复删除也应满足这个行为。
+
+Case 2  末级项有效
+先取得旧物理页，再清空末级项并同步该地址的 TLB。旧页引用减少一次，计数归零时调用 free_page()。
+```
+
+## 功能模块二：进程创建及初始化
+
+**负责人：** 2410690-王睿瑜
+
+### 一、Spec（设计依据）
+
+**1. 输入与调用条件**
+
+- 以小组仓库 `kylie-dot/OS2026_Labs` 的 Lab4 框架提交 `a211d8d` 为基线。目标文件中的 `LAB4 function2 YOUR CODE` 是 B 模块的实现位置。
+- `proc_init()` 在内核启动阶段调用，依赖内存管理已初始化、启动页表和启动栈可用。普通线程由 `kernel_thread()` 提供初始 Trap 帧，再交给 `do_fork()`。
+- 以本仓库的头文件和汇编为准。线程入口使用 `s0` 保存目标函数，`s1` 保存参数。`forkrets` 将传入的 Trap 帧地址装入 `sp`，再走既有 Trap 恢复路径。
+
+**2. 输出与处理过程**
+
+- 初始化 PCB、创建 `idleproc` 和 `initproc`，为新线程准备独立内核栈、Trap 帧与切换上下文。
+- 创建成功时分配唯一 PID，登记到进程链表和 PID 哈希表，更新进程计数，再将线程设为就绪。失败时返回负错误码并释放此前取得的资源。
+- 内核线程共享启动页表，当前阶段保留 `copy_mm()` 接口。线程创建与调度通过 PCB 中的状态、栈、Trap 帧和切换上下文衔接。
+
+**3. 修改范围与禁止项**
+
+仅编辑 `code/kern/process/proc.c` 的 B 模块，以及编译所需的头文件引用和外部符号声明。保留 C 模块的 `LAB4 function3 YOUR CODE`，沿用现有数据结构、辅助函数与公共接口。
+
+### 二、最终提示词
+
+```text
+[PROMPT]
+任务
+你正在操作 kylie-dot/OS2026_Labs 的 RISC-V uCore 教学内核。请在当前工作区直接修改 code/kern/process/proc.c，一次完成 Lab4 功能模块二“进程创建及初始化”。工作区应基于小组的 Lab4 框架提交 a211d8d，目标文件应有 LAB4 function2 YOUR CODE 标记。先检查当前分支、工作区和文件内容。如果当前版本不是该框架、模块已经实现，或目标区域含有他人的改动，请说明情况并停下，保留已有工作。
+
+操作要求
+在 function2 标记下新增下列六个函数，将标记改为 //LAB4 function2 2410690。
+仅编辑 proc.c 的 function2 区域及该文件必要的 include 和 extern 声明。保留 function3 标记、现有辅助函数、结构体、公共签名、Trap 与调度实现、测试和构建脚本。优先使用项目现有接口。
+
+输出要求
+直接编辑实际文件并审查 diff。完成后说明修改位置、线程首次运行路径、失败清理顺序以及仍需验证的项目。编译、QEMU、评分与截图由我完成。不要代为提交或推送 Git，也不要声称未经执行的测试通过。
+
+[RELY]
+从仓库根目录读取：
+- code/kern/process/proc.c、proc.h、entry.S
+- code/kern/trap/trap.h、trapentry.S
+- code/kern/schedule/sched.c、sched.h，及 switch_to 的实际汇编实现或待实现位置
+- code/kern/mm/pmm.h、memlayout.h、kmalloc.h
+- code/kern/sync/sync.h、code/libs/riscv.h、list.h、error.h
+- code/kern/init/init.c、entry.S 和 code/tools/test_lab4.c
+
+以实际声明核对 bootstack、boot_pgdir_pa、KSTACKSIZE、CLONE_VM、MAX_PROCESS、错误码和中断保存/恢复接口。使用已有的 setup_kstack、put_kstack、get_pid、hash_proc、find_proc、wakeup_proc 与 forkret。核对 entry.S 中 move a0, s1 和 jalr s0，以及 forkrets 将传入指针交给 __trapret 的约定。需要读取 sstatus 时显式引入声明 read_csr 和 SSTATUS 位的头文件。
+
+[GUARANTEE]
+实现以下函数并保留给定接口：
+static struct proc_struct *alloc_proc(void);
+int kernel_thread(int (*fn)(void *), void *arg, uint32_t clone_flags);
+static void copy_thread(struct proc_struct *proc, uintptr_t stack, struct trapframe *tf);
+static int copy_mm(uint32_t clone_flags, struct proc_struct *proc);
+int do_fork(uint32_t clone_flags, uintptr_t stack, struct trapframe *tf);
+void proc_init(void);
+
+[SPECIFICATION]
+实现单元：alloc_proc
+Pre-Condition：kmalloc 与启动页表已就绪。
+Post-Condition：分配失败返回 NULL。成功时初始化全部 PCB 字段，设置 state=PROC_UNINIT、pid=-1、pgdir=boot_pgdir_pa，mm、parent、tf 等指针为空。运行次数、栈地址、调度标记、flags、名称和 context 清零。分别初始化 list_link 与 hash_link，PCB 此时未登记到全局结构。
+
+实现单元：kernel_thread
+Pre-Condition：fn 是有效的内核线程入口，调用方已建立 current。
+Post-Condition：创建并清零临时 Trap 帧，s0 存 fn、s1 存 arg，epc 指向 kernel_thread_entry。根据当前 sstatus 设置 SPP 和 SPIE、清除 SIE，使 sret 回到 S 模式。调用 do_fork(clone_flags | CLONE_VM, 0, &tf)，返回其结果。
+
+实现单元：copy_thread
+Pre-Condition：新 PCB 的内核栈已由 setup_kstack 分配，tf 指向有效模板。
+Post-Condition：在新内核栈顶部预留并复制完整 Trap 帧，令 proc->tf 指向副本。将副本的 a0 置为 0。stack 为 0 时，将副本的 gpr.sp 设为帧地址；否则使用 stack。context.ra 指向 forkret，context.sp 指向帧地址。首次切换应能走 forkret → forkrets → __trapret → sret → kernel_thread_entry。
+
+实现单元：copy_mm
+Pre-Condition：当前实验创建内核线程，PCB 已完成默认初始化。
+Post-Condition：保留接口并返回 0，内核线程继续共享启动页表，mm 保持 NULL。避免新增用户地址空间复制逻辑。
+
+实现单元：do_fork
+Pre-Condition：current、进程链表和 PID 哈希桶已经初始化，tf 指向有效模板。
+Post-Condition：
+1. 达到 MAX_PROCESS 时返回 -E_NO_FREE_PROC；PCB 分配失败时返回 -E_NO_MEM。
+2. 设置父进程为 current，依次准备内核栈、地址空间接口和运行现场。内核栈分配失败时释放 PCB。copy_mm 失败时先释放内核栈再释放 PCB，返回对应错误。失败路径不能将 PCB 留在全局结构中或增加进程计数。
+3. 在同一个本地关中断区间内分配唯一 PID、登记哈希表和 proc_list，并更新 nr_process。按原状态恢复中断。完成登记后调用 wakeup_proc，返回新 PID。
+
+实现单元：proc_init
+Pre-Condition：由启动路径调用一次，bootstack 与启动页表已建立。
+Post-Condition：初始化进程链表和全部哈希桶。创建 idleproc，设 PID 为 0、状态为 PROC_RUNNABLE，复用 bootstack，置 need_resched，计入 nr_process 并设为 current。idleproc 无需进入普通 PID 哈希表。再调用 kernel_thread 创建运行 init_main 的 initproc；创建失败须按框架方式报错。用返回的 PID 通过 find_proc 取回 initproc 并设置名称。线程名称为 idle 和 init，复制时包含结尾 NUL，避免用固定长度从短字符串字面量越界读取。演示参数使用 Hello world!!，若框架测试明确指定其他参数，以测试要求为准。
+```
+
+#### 三、实现迭代过程
+
+| 轮次 | 实际现象 / 审查发现 | 原因分析 | 修正与结果 |
+| --- | --- | --- | --- |
+| v1 首次生成与静态审查 | Codex 在 `code/kern/process/proc.c` 中实现了 B 模块的六个函数。`proc.o` 强制重编译通过。人工审查发现，`kernel_thread()` 只在 `SSTATUS_SPP` 已置位时再次置位。 | 如果读取的 `SPP` 为 0，条件分支不会执行，首次 `sret` 将尝试返回 U 模式。该问题涉及运行时的特权级切换，编译检查无法发现。 | 发送第二轮提示词，要求无条件设置 `SPP`，并对照框架复核 `idleproc` 的登记方式。 |
+| v2 修正与复验 | Codex 改用 `tf.status \|= SSTATUS_SPP;`，同时保留 `SPIE` 置位和 `SIE` 清零。复核后保留 `idleproc` 在 `proc_list` 中的登记。 | 无条件置位保证 Trap 帧中的 `SPP` 为 1，使首次 `sret` 的目标特权级为 S 模式。`idleproc` 仍未登记到 PID 哈希表。 | 在 WSL 中执行 `git diff --check`，无输出。`proc.o` 强制重编译通过，修正版用于正式提交 `40e9808`。QEMU 首次调度和 `make grade` 待验证。 |
+
+**第二次实际发送的提示词**
+
+```text
+请在当前试跑工作区做第二轮修正，只修改 code/kern/process/proc.c 的 function2 区域。
+
+1. 修正 kernel_thread() 对 sstatus 的初始化。当前代码只有在 SSTATUS_SPP 已经置位时才再次置位。请基于 read_csr(sstatus) 无条件设置 SSTATUS_SPP 和 SSTATUS_SPIE，并清除 SSTATUS_SIE，确保首次 sret 返回 S 模式。
+2. 对照 get_pid()、调度器和 code/tools/test_lab4.c，核对 proc_init() 是否应将 idleproc 插入 proc_list。说明源码依据，再决定是否修改。
+3. 完成后列出实际改动。若无法读取 Git diff，请如实说明。编译和 QEMU 由我执行。
+```
+
 ## 功能模块三：进程调度
 
 **负责人：** 2411333-吴卓彦

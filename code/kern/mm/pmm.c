@@ -87,7 +87,45 @@ size_t nr_free_pages(void)
     return ret;
 }
 
-//lab2 请补充你在lab2中的代码
+// Lab2: 从设备树获取物理内存范围，初始化页描述符和空闲区。
+static void page_init(void)
+{
+    extern char end[];
+
+    uint64_t base = get_memory_base();
+    uint64_t size = get_memory_size();
+    if (base == 0 || size == 0)
+    {
+        panic("page_init: invalid memory info from dtb\n");
+    }
+
+    va_pa_offset = PHYSICAL_MEMORY_OFFSET;
+    uintptr_t mem_end = base + size;
+    uintptr_t limit = PADDR(KERNTOP);
+    if (mem_end > limit)
+    {
+        mem_end = limit;
+    }
+    npage = PPN(mem_end);
+    pages = (struct Page *)ROUNDUP((uintptr_t)end, PGSIZE);
+
+    // 内核镜像和页描述符数组占用的物理页保留给内核。
+    for (size_t i = 0; i < npage - nbase; i++)
+    {
+        SetPageReserved(pages + i);
+    }
+
+    uintptr_t freemem = ROUNDUP(PADDR(pages + (npage - nbase)), PGSIZE);
+    size_t nfree = 0;
+    if (PPN(freemem) < npage)
+    {
+        nfree = npage - PPN(freemem);
+        init_memmap(pa2page(freemem), nfree);
+    }
+
+    cprintf("memory: base = 0x%016lx, size = 0x%016lx\n", base, size);
+    cprintf("free memory: start = 0x%016lx, pages = %lu\n", freemem, nfree);
+}
 
 static void enable_paging(void)
 {
@@ -220,13 +258,54 @@ struct Page *get_page(pde_t *pgdir, uintptr_t la, pte_t **ptep_store)
     return NULL;
 }
 
-//LAB4 function1 YOUR CODE
+//LAB4 function1 2413497
 
+// 撤销一个有效的末级映射；先清除旧翻译，再允许分配器回收物理页。
+static void page_remove_pte(pde_t *pgdir, uintptr_t la, pte_t *ptep)
+{
+    struct Page *page = pte2page(*ptep);
+    *ptep = 0;
+    tlb_invalidate(pgdir, la);
+    if (page_ref_dec(page) == 0)
+    {
+        free_page(page);
+    }
+}
 
+int page_insert(pde_t *pgdir, struct Page *page, uintptr_t la, uint32_t perm)
+{
+    pte_t *ptep = get_pte(pgdir, la, 1);
+    if (ptep == NULL)
+    {
+        // 页表分配失败时，传入的数据页仍由调用者持有。
+        return -E_NO_MEM;
+    }
 
+    // 同页重映射只更新权限，不改变引用计数或回收该页。
+    if (!(*ptep & PTE_V) || pte2page(*ptep) != page)
+    {
+        page_ref_inc(page);
+        if (*ptep & PTE_V)
+        {
+            page_remove_pte(pgdir, la, ptep);
+        }
+    }
 
+    // 重新构造整个页表项，确保撤销的权限位不会残留。
+    *ptep = pte_create(page2ppn(page), perm);
+    tlb_invalidate(pgdir, la);
+    return 0;
+}
 
-
+void page_remove(pde_t *pgdir, uintptr_t la)
+{
+    // 仅查找已有页表，缺失映射时不分配或回收上层页表页。
+    pte_t *ptep = get_pte(pgdir, la, 0);
+    if (ptep != NULL && (*ptep & PTE_V))
+    {
+        page_remove_pte(pgdir, la, ptep);
+    }
+}
 
 // invalidate a TLB entry, but only if the page tables being
 // edited are the ones currently in use by the processor.

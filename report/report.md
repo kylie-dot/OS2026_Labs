@@ -5,67 +5,76 @@
 | 项目 | 内容 |
 |------|------|
 | **实验名称** | Lab 4：进程管理 |
-| **小组成员** | 学号1-姓名1、学号2-姓名2、学号3-姓名3 |
-| **完成日期** | YYYY-MM-DD |
+| **小组成员** | 2411333-吴卓彦、2410690-王睿瑜、2413497-姚嘉乐 |
+| **完成日期** | 2026-11-13 |
 
 ### 小组分工
 
-练习如何分工？
-
 | 成员 | 负责的练习/模块 |
 |------|----------------|
-| 学号1-姓名1 | [练习或模块名称] |
-| 学号2-姓名2 | [练习或模块名称] |
-| 2411333-吴卓彦 | 功能模块三：进程调度，Lab 3 Trap 迁移，开关中断 Challenge |
+| 2413497-姚嘉乐 | 功能模块一：虚拟内存页操作，迁移 Lab2 的物理内存初始化和 Best-Fit，完成 Challenge 2（深入理解不同分页模式的工作原理） |
+| 2410690-王睿瑜 | 功能模块二：进程创建及初始化，负责 PCB 初始化、内核线程创建和首次运行现场的准备，深入了解线程创建主线，完成PCB、内核栈、trapframe 的原理对照 |
+| 2411333-吴卓彦 | 功能模块三：进程调度与上下文切换，迁移 Lab3 的 Trap 处理代码，完成 Challenge 1（开关中断的实现）|
 
-实验报告如何分工？
+报告第三，四，六节由各成员撰写自己负责的模块和扩展练习，五、测试与验证由2411333-吴卓彦完成，最终报告整合由2413497-姚嘉乐完成。
 
 ---
 
 ## 一、实验目的
 
-<!-- 说明本次实验的主要目标和预期成果 -->
-
-本实验的主要目的是：
-
-1. [目的1：例如，理解用户态进程如何通过系统调用进入内核]
-2. [目的2：例如，掌握进程创建、执行、退出的完整生命周期]
-3. [目的3：例如，学习使用 AI 辅助开发操作系统核心功能]
+1. 理解 Sv39 多级页表的组织方式，实现 4 KiB 页映射的建立、替换和撤销，掌握页表项、物理页引用计数和 TLB 同步之间的关系。
+2. 理解内核线程的创建和初始化过程，掌握 PCB、内核栈和 Trap 帧的用途，以及 `idleproc` 和 `initproc` 的建立过程。
+3. 理解调度器如何选择就绪线程，掌握切换时如何更新当前线程、切换页表并保存和恢复寄存器。通过 QEMU 观察 `initproc` 首次运行。
+4. 按四段式编写 Spec 和提示词，借助 AI 完成代码实现，并通过代码审查、QEMU 启动和课程评分验证结果。
 
 ---
 
 ## 二、实验环境
 
-你们使用的 AI 工具
+**AI 编程工具与模型**
 
-| 成员 | AI 编程工具 | 底层模型 | 备注 |
-|------|------------|---------|------|
-| 学号1-姓名1 | [例如：Cline（VS Code插件） / Claude Code（终端 Agent） / DeepSeek Harness等] | [例如：Claude Sonnet 4.5 / GPT-5.5 / DeepSeek-V4-Flash等] | [可选：特殊配置等] |
-| 学号2-姓名2 | | | |
-| 学号3-姓名3 | | | |
+| 成员 | AI 编程工具 | 底层模型 |
+|------|------------|----------|
+| 2413497-姚嘉乐 | Codex（VS Code 插件） | GPT-6.1-sol |
+| 2411333-吴卓彦 | Claude Code（CLI） | GPT-6.1-sol |
+| 2410690-王睿瑜 | Codex（VS Code 插件） | GPT-6.1-sol |
 
-**说明：**
-- **AI 编程工具**：指具体使用的终端工具、编辑器插件、桌面应用或浏览器界面
-- **底层模型**：指该工具使用的大语言模型及版本
 
 ---
 
 ## 三、实验整体逻辑分析
 
-### 2.1 本章节的逻辑主线
+### 3.1 本章节的逻辑主线
 
-[请用自己的话描述本章实验的核心主线，例如：
-- 本章围绕哪个核心主题展开？（例如：用户进程管理、虚拟内存、文件系统等）
-- 整个实验解决什么问题？（例如：如何让用户程序运行在操作系统之上）]
+本实验从内核启动时的一条执行流出发，先准备内存管理和 Trap 恢复机制，再建立内核线程并完成第一次调度。启动汇编先用 Sv39 大页建立内核的高地址映射。进入 `kern_init()` 后，内核初始化物理页分配器，验证 4 KiB 页映射操作，并准备分配 PCB 和内核栈所需的内存。
 
-### 2.2 功能的逐步实现
+`proc_init()` 把正在执行的启动现场登记为 `idleproc`，并创建共享启动页表、拥有独立内核栈的 `initproc`。此时 `initproc` 已就绪，CPU 仍在执行 `idleproc`。进入 `cpu_idle()` 后，调度器才选中 `initproc`。上下文切换恢复它预先准备好的栈和返回地址，再借助 Lab3 的 Trap 恢复代码进入线程入口，最终执行 `init_main()`。
 
-[说明本章实验是按照什么顺序逐步实现各个功能的，以及为什么要按这个顺序，例如：
+```text
+启动入口 → kern_init()
+         → pmm_init() → pic_init() → idt_init() → vmm_init()
+         → proc_init()：登记 idleproc，创建 initproc
+         → clock_init() → intr_enable()
+         → cpu_idle() → schedule() → proc_run() → switch_to()
+         → forkret → forkrets → __trapret（sret）
+         → kernel_thread_entry → init_main()
+```
 
-1. 首先实现**功能A** → 为什么首先实现这个？（例如：建立系统调用接口是后续所有用户态功能的基础）
-2. 接着再完善**功能B** → 为什么接着实现这个？（例如：有了系统调用后，需要能够加载和启动第一个用户进程）
-3. 然后完成**功能C** → 为什么然后实现这个？（例如：有了第一个进程后，需要实现进程复制功能）
-4. 最后补充了**功能D** → 为什么最后实现这个？（例如：最后完善进程退出和清理机制，形成完整闭环）]
+### 3.2 功能的逐步实现
+
+首先实现功能模块一、虚拟内存页操作。在 Lab2 物理页管理的基础上，补全 page_insert() 和 page_remove()，通过页表自检后继续初始化内核内存分配器，为线程创建准备所需的内存。
+
+接着实现功能模块二、内核线程的创建与初始化。建立 idleproc，为 initproc 分配 PCB 和内核栈，准备首次运行的现场，并将其置为就绪状态，供调度器选择。
+
+最后实现功能模块三、线程调度与上下文切换。调度器选中就绪的 initproc，借助上下文切换和 Lab3 的 Trap 恢复代码，让它开始执行 init_main()。
+
+实际编程中，为了便于团队协作，我们按这三个模块并行开发，完成后统一整合。
+
+
+**功能模块一（2413497-姚嘉乐）**
+
+1. **接回物理页管理。** 迁移 Lab2 的 `page_init()` 和 Best-Fit 分配器，探测物理内存、初始化页描述符并登记空闲页。后续新增下级页表和分配内核栈都依赖物理页分配器。
+2. **补齐页映射操作。** 在已有的 `get_pte()` 上实现 `page_insert()` 和 `page_remove()`，处理映射的建立、替换与撤销，同时维护物理页引用计数和 TLB。内核在 `pmm_init()` 中通过 `check_pgdir()` 和 `check_boot_pgdir()` 检查页表行为，再初始化供 PCB 分配使用的 `kmalloc`。
 
 **功能模块二** [2410690-王睿瑜]
 1. 用 alloc_proc() 建立 PCB 的基础状态，为启动线程和普通新线程共用。
@@ -89,18 +98,130 @@
 每个功能模块或者练习中可能包含多项任务，请根据实际情况调整
 -->
 
-### 功能模块二：[进程创建及初始化]
+### 功能模块一：虚拟内存页操作
 
-**负责人：** [2410690-王睿瑜]
+**负责人：** 2413497-姚嘉乐
+
+#### 模块功能描述
+
+**需要实现的函数**
+
+```c
+int page_insert(pde_t *pgdir, struct Page *page, uintptr_t la, uint32_t perm);
+void page_remove(pde_t *pgdir, uintptr_t la);
+```
+
+**所在文件** `code/kern/mm/pmm.c` 中的 `LAB4 function1`。
+
+**功能说明**
+
+两个函数都通过 `get_pte()` 找到 `la` 对应的末级页表项。插入时允许创建缺少的下级页表。末级项为空时给目标物理页增加一次引用，原来就指向同一页时只更新权限，原来指向另一页时先撤销旧映射。最后根据物理页号和本次传入的权限重新构造页表项，再刷新该地址的 TLB。重新构造页表项可以清除本次撤销的权限位。
+
+删除时只查找已有的页表路径。找到有效映射后，`page_remove_pte()` 先记下旧物理页，再清空页表项并刷新 TLB，最后将旧页的引用计数减一，当页引用为0时将它归还给分配器。
+
+```text
+page_insert → get_pte(..., 1) → 必要时调用 page_remove_pte()
+            → pte_create() → 写入页表项 → tlb_invalidate()
+page_remove → get_pte(..., 0) → 末级项有效时调用 page_remove_pte()
+```
+
+#### Spec 与提示词设计
+
+我先读 `get_pte()` 的实现，确认插入和删除时的查表方式，再对照 `check_pgdir()` 和评分中的 PMM 用例，按原映射为空、指向同一页或指向另一页写出各自的引用计数和权限要求。页表分配失败与重复删除也单独列出，便于检查失败时是否改动了数据页，以及删除是否多减了一次引用。
+
+在提示词里，我用 `[PROMPT]` 限定修改位置，用 `[RELY]` 列出项目已有接口，用 `[GUARANTEE]` 写明两个函数签名，再把上述情形写入 `[SPECIFICATION]`。替换或删除映射时，要先撤销旧映射并刷新 TLB，才能回收引用归零的旧页。详细说明可以见prompt.md。
+
+#### 最终提示词
+
+以下为实际使用的完整最终提示词。
+
+```text
+[PROMPT]
+任务：
+在code/kern/mm/pmm.c中实现 page_insert() 和 page_remove()，用于建立、替换和撤销 Sv39 的 4 KiB 页映射。
+
+操作要求：
+在工作区的实际源码中补全 //LAB4 function1 YOUR CODE 所在区域，将标记改为 //LAB4 function1 2413497。编辑范围限于该区域，沿用现有函数声明、页表查找逻辑和物理页分配器。需要共用的辅助函数可以定义为本文件的 static 函数。
+
+输出要求：
+直接进行文件操作，使用下面[RELY]、[GUARANTEE]、 [SPECIFICATION]部分的信息。积极合理的使用注释，维护代码的可读性。
+
+[RELY]
+请先阅读code/kern/mm/pmm.c和code/kern/mm/pmm.h。
+
+- 查找页表项。get_pte(pgdir, la, 1) 可以创建缺少的下级页表，传 0 则只查找。
+  返回 NULL 表示没找到末级项。返回指针时，用 *ptep & PTE_V 判断该项是否有效。
+  只读查询也可以用 get_page()，它返回已映射的物理页描述符，并可通过ptep_store 输出末级页表项的地址。
+- 读写映射。用 pte_create(page2ppn(page), perm) 构造新页表项，它会设置 PTE_V。用 pte2page(*ptep) 取得有效页表项对应的旧页。
+- 管理物理页。page_ref_inc() 和 page_ref_dec() 更新引用计数。
+  page_ref_dec() 返回减一后的计数，free_page() 将一页归还分配器。
+- 修改末级页表项后，调用 tlb_invalidate(pgdir, la)。
+- 常量。PTE_V 定义在 mmu.h，E_NO_MEM 定义在 error.h。
+
+[GUARANTEE]
+
+实现以下两个公开接口，签名与 pmm.h 一致。
+
+int page_insert(pde_t *pgdir, struct Page *page, uintptr_t la, uint32_t perm);
+void page_remove(pde_t *pgdir, uintptr_t la);
+
+[SPECIFICATION]
+
+实现单元一  page_insert()
+
+Pre-Condition
+物理内存管理已初始化。pgdir 指向有效的 Sv39 根页表。la 位于可使用末级页表项的 4 KiB 映射范围内。page 是已分配或已被其他地址映射的物理页。
+
+Post-Condition
+成功时返回 0。目标虚拟页指向 page，页表项按传入的 perm 构造。被撤销的旧映射及其引用计数得到正确处理。
+
+Case 1  末级项原本为空
+建立映射，目标物理页的引用计数增加一次。
+
+Case 2  原映射指向同一物理页
+更新页表项的权限。物理页号、引用计数和空闲页数保持原值。
+
+Case 3  原映射指向另一物理页
+新页增加一次引用，旧页减少一次引用。旧页仍有引用时继续保留，归零时归还分配器。
+
+Case 4  无法分配所需的页表页
+返回 -E_NO_MEM。目标数据页的映射和引用计数均未改变，调用者仍负责传入的 page。get_pte() 已挂接的上层页表沿用框架的管理方式。
+
+Requirements
+每次成功写入末级项后，同步该虚拟地址的 TLB。回收旧页前，确保旧页表项和旧翻译均已失效。权限按 perm 重新构造，旧权限中被撤销的位应清除。
+
+实现单元二  page_remove()
+
+Pre-Condition
+pgdir 指向有效的 Sv39 根页表。la 位于可使用末级页表项的 4 KiB 映射范围内，目标映射可以存在或缺失。
+
+Post-Condition
+目标虚拟页的映射被撤销。其他虚拟页的映射和上层页表页继续有效。
+
+Case 1  页表路径缺失或末级项无效
+直接返回，页表、引用计数和空闲页数保持原值。对同一地址重复删除也应满足这个行为。
+
+Case 2  末级项有效
+先取得旧物理页，再清空末级项并同步该地址的 TLB。旧页引用减少一次，计数归零时调用 free_page()。
+```
+
+#### 实现迭代过程
+
+使用这版提示词完成实现后，验证后确认实现正确，没有出现问题。
+
+---
+
+### 功能模块二：进程创建及初始化
+
+**负责人：** 2410690-王睿瑜
 
 #### 模块功能描述
 
 **需要实现/修改的函数：**
 
-修改文件为 code/kern/process/proc.c，对应框架中的 LAB4 function2。本模块实现以下函数。
+修改文件为 `code/kern/process/proc.c`，对应框架中的 `LAB4 function2`。本模块实现以下函数。
 
 ```c
-// 列出本模块涉及的所有函数签名
 static struct proc_struct *alloc_proc(void);
 int kernel_thread(int (*fn)(void *), void *arg, uint32_t clone_flags);
 static void copy_thread(struct proc_struct *proc, uintptr_t stack,
@@ -112,90 +233,120 @@ void proc_init(void);
 
 **功能说明：**
 
-本模块负责内核线程的创建与初始化，为调度器提供可运行的线程。系统启动时，`proc_init()` 将当前执行现场登记为 `idleproc`，使其复用启动栈并成为当前线程，再通过 `kernel_thread()` 创建执行 `init_main()` 的 `initproc`。
+本模块负责内核线程的创建与初始化，为调度器提供可运行的线程。系统启动时，`proc_init()` 将当前执行现场登记为 `idleproc`，让它复用启动栈、成为当前线程，并将它计入进程总数。随后通过 `kernel_thread()` 创建执行 `init_main()` 的 `initproc`。
 
 创建新线程时，`do_fork()` 分配进程控制块（PCB）和内核栈，准备首次运行所需的 Trap 帧与切换上下文，再分配 PID，将线程登记到进程链表和 PID 哈希表，并置为就绪态。如果创建过程中发生错误，函数返回相应错误码，并释放已经分配的资源。
 
 本模块调用内存管理模块的接口分配 PCB 和内核栈，创建的内核线程共享启动页表。调度模块选中新线程后，通过 `switch_to()` 恢复切换上下文，从 `forkret()` 进入 Trap 恢复流程，最终执行创建时指定的线程函数。
 
+#### Spec 与提示词设计
+
+模块二的规格按 PCB 初始化、首次运行现场、创建与登记、启动初始化的顺序编写。对照线程入口和 Trap 恢复汇编，确定函数地址、参数、栈指针和入口地址的保存位置，再根据资源取得的顺序写明各个失败点的清理要求，以及先登记、再唤醒的顺序。
+
+实际提示词用 `[PROMPT]` 写明基线和修改范围，以 `[RELY]` 指向 C 结构体、汇编入口和已有辅助接口。`[GUARANTEE]` 列出六个函数的签名，`[SPECIFICATION]` 按函数写出调用前提、完成后的状态和分配失败时需要释放的资源。
+
+设计依据见prompt.md中。
+
 #### 最终提示词
 
-以下是经过迭代优化后，最终成功实现该功能的提示词：
+以下是首轮在 VS Code 中发送给 Codex 的完整提示词。第二轮的修正提示词见下文迭代过程。
 
 ````markdown
 
-[TASK]
-基于小组 Lab4 框架，协助我逐步完成 code/kern/process/proc.c 的 LAB4 function2。
-先核对实际源码和函数依赖，再按 PCB 初始化、首次运行现场、创建与登记、启动初始化的顺序给出实现。
+[PROMPT]
+任务
+你正在操作 kylie-dot/OS2026_Labs 的 RISC-V uCore 教学内核。请在当前工作区直接修改 code/kern/process/proc.c，一次完成 Lab4 功能模块二“进程创建及初始化”。工作区应基于小组的 Lab4 框架提交 a211d8d，目标文件应有 LAB4 function2 YOUR CODE 标记。先检查当前分支、工作区和文件内容。如果当前版本不是该框架、模块已经实现，或目标区域含有他人的改动，请说明情况并停下，保留已有工作。
 
+操作要求
+在 function2 标记下新增下列六个函数，将标记改为 //LAB4 function2 2410690。
+仅编辑 proc.c 的 function2 区域及该文件必要的 include 和 extern 声明。保留 function3 标记、现有辅助函数、结构体、公共签名、Trap 与调度实现、测试和构建脚本。优先使用项目现有接口。
+
+输出要求
+直接编辑实际文件并审查 diff。完成后说明修改位置、线程首次运行路径、失败清理顺序以及仍需验证的项目。编译、QEMU、评分与截图由我完成。不要代为提交或推送 Git，也不要声称未经执行的测试通过。
 
 [RELY]
-以 proc.h 的 proc_struct 和 context、trap.h 的 trapframe 和 pushregs 为准。
-依据 entry.S 确认 s0 保存线程函数地址，s1 保存参数。依据 trapentry.S 确认
-forkrets 将 sp 指向传入的 Trap 帧，随后通过 __trapret 恢复现场并执行 sret。
-使用框架已有的 boot_pgdir_pa、bootstack、KSTACKSIZE、CLONE_VM、
-setup_kstack、put_kstack、get_pid、hash_proc、wakeup_proc 和中断保存/恢复接口。
-从 riscv.h 使用 read_csr 和 SSTATUS 位定义。
+从仓库根目录读取：
+- code/kern/process/proc.c、proc.h、entry.S
+- code/kern/trap/trap.h、trapentry.S
+- code/kern/schedule/sched.c、sched.h，及 switch_to 的实际汇编实现或待实现位置
+- code/kern/mm/pmm.h、memlayout.h、kmalloc.h
+- code/kern/sync/sync.h、code/libs/riscv.h、list.h、error.h
+- code/kern/init/init.c、entry.S 和 code/tools/test_lab4.c
+
+以实际声明核对 bootstack、boot_pgdir_pa、KSTACKSIZE、CLONE_VM、MAX_PROCESS、错误码和中断保存/恢复接口。使用已有的 setup_kstack、put_kstack、get_pid、hash_proc、find_proc、wakeup_proc 与 forkret。核对 entry.S 中 move a0, s1 和 jalr s0，以及 forkrets 将传入指针交给 __trapret 的约定。需要读取 sstatus 时显式引入声明 read_csr 和 SSTATUS 位的头文件。
+
+[GUARANTEE]
+实现以下函数并保留给定接口：
+static struct proc_struct *alloc_proc(void);
+int kernel_thread(int (*fn)(void *), void *arg, uint32_t clone_flags);
+static void copy_thread(struct proc_struct *proc, uintptr_t stack, struct trapframe *tf);
+static int copy_mm(uint32_t clone_flags, struct proc_struct *proc);
+int do_fork(uint32_t clone_flags, uintptr_t stack, struct trapframe *tf);
+void proc_init(void);
 
 [SPECIFICATION]
-实现 alloc_proc、kernel_thread、copy_thread、copy_mm、do_fork 和 proc_init。
-新 PCB 处于 PROC_UNINIT，PID 为 -1，使用启动页表。新线程的 Trap 帧位于
-自己的内核栈上，首次切换进入 forkret。当前阶段保留 copy_mm 接口。
-分配失败时返回负错误码并释放已取得的资源。PID 分配、登记和计数更新置于
-同一个关中断区间，登记完成后再唤醒。先将 idleproc 设为 current，再创建 initproc。
-给出逐步验证方法。若整机构建受其他模块阻塞，先用 Makefile 单独编译 proc.o，
-并根据实际终端输出记录验证状态。
+实现单元：alloc_proc
+Pre-Condition：kmalloc 与启动页表已就绪。
+Post-Condition：分配失败返回 NULL。成功时初始化全部 PCB 字段，设置 state=PROC_UNINIT、pid=-1、pgdir=boot_pgdir_pa，mm、parent、tf 等指针为空。运行次数、栈地址、调度标记、flags、名称和 context 清零。分别初始化 list_link 与 hash_link，PCB 此时未登记到全局结构。
+
+实现单元：kernel_thread
+Pre-Condition：fn 是有效的内核线程入口，调用方已建立 current。
+Post-Condition：创建并清零临时 Trap 帧，s0 存 fn、s1 存 arg，epc 指向 kernel_thread_entry。根据当前 sstatus 设置 SPP 和 SPIE、清除 SIE，使 sret 回到 S 模式。调用 do_fork(clone_flags | CLONE_VM, 0, &tf)，返回其结果。
+
+实现单元：copy_thread
+Pre-Condition：新 PCB 的内核栈已由 setup_kstack 分配，tf 指向有效模板。
+Post-Condition：在新内核栈顶部预留并复制完整 Trap 帧，令 proc->tf 指向副本。将副本的 a0 置为 0。stack 为 0 时，将副本的 gpr.sp 设为帧地址；否则使用 stack。context.ra 指向 forkret，context.sp 指向帧地址。首次切换应能走 forkret → forkrets → __trapret → sret → kernel_thread_entry。
+
+实现单元：copy_mm
+Pre-Condition：当前实验创建内核线程，PCB 已完成默认初始化。
+Post-Condition：保留接口并返回 0，内核线程继续共享启动页表，mm 保持 NULL。避免新增用户地址空间复制逻辑。
+
+实现单元：do_fork
+Pre-Condition：current、进程链表和 PID 哈希桶已经初始化，tf 指向有效模板。
+Post-Condition：
+1. 达到 MAX_PROCESS 时返回 -E_NO_FREE_PROC；PCB 分配失败时返回 -E_NO_MEM。
+2. 设置父进程为 current，依次准备内核栈、地址空间接口和运行现场。内核栈分配失败时释放 PCB。copy_mm 失败时先释放内核栈再释放 PCB，返回对应错误。失败路径不能将 PCB 留在全局结构中或增加进程计数。
+3. 在同一个本地关中断区间内分配唯一 PID、登记哈希表和 proc_list，并更新 nr_process。按原状态恢复中断。完成登记后调用 wakeup_proc，返回新 PID。
+
+实现单元：proc_init
+Pre-Condition：由启动路径调用一次，bootstack 与启动页表已建立。
+Post-Condition：初始化进程链表和全部哈希桶。创建 idleproc，设 PID 为 0、状态为 PROC_RUNNABLE，复用 bootstack，置 need_resched，计入 nr_process 并设为 current。idleproc 无需进入普通 PID 哈希表。再调用 kernel_thread 创建运行 init_main 的 initproc；创建失败须按框架方式报错。用返回的 PID 通过 find_proc 取回 initproc 并设置名称。线程名称为 idle 和 init，复制时包含结尾 NUL，避免用固定长度从短字符串字面量越界读取。演示参数使用 Hello world!!，若框架测试明确指定其他参数，以测试要求为准。
 
 ````
 
 #### 实现迭代过程
 
-本模块的实现经历了 [3] 次迭代，过程如下：
-
----
-
 ##### 第一次迭代
 
-**遇到的问题：**
-最初按 alloc_proc() 的函数签名搜索源码，终端没有返回结果。查看完整的 proc.c 后发现，框架只提供了 LAB4 function2 YOUR CODE 标记，需要在该位置新增函数。
+我在基于框架提交 `a211d8d` 创建的独立工作区中，将首轮完整提示词发送给 Codex。Codex 在 `code/kern/process/proc.c` 中引入 `riscv.h`，将标记改为 `//LAB4 function2 2410690`，并实现了 `alloc_proc()`、`kernel_thread()`、`copy_thread()`、`copy_mm()`、`do_fork()` 和 `proc_init()`。由于 Codex 无法解析该工作区的 `.git` 指针，我随后在 WSL 中核对了基线和改动范围。`git diff --check` 无输出，`proc.o` 强制重编译通过。
 
-**问题解决策略：**
-在提示词的 [RELY] 中补充实际的 proc.c 和 proc.h，明确以 LAB4 function2 标记定位实现区域。根据 proc_struct 的实际字段编写 alloc_proc()，并核对 boot_pgdir_pa 和 list_init() 的声明后再初始化 PCB。
+人工检查发现，首轮代码只在 `SSTATUS_SPP` 已为 1 时再次置位。如果读取到的 `SPP` 为 0，这段代码会保留原值，首次执行 `sret` 时会尝试返回 U 模式。新建内核线程应在 S 模式启动，因此需要无条件设置 `SPP`。首轮代码还将 `idleproc` 加入了 `proc_list`，我把这项处理也交给 Codex 对照框架复核。
+
+为修正 `SPP` 并复核 `idleproc` 的登记方式，我第二次发送了以下提示词。
+
+```text
+请在当前试跑工作区做第二轮修正，只修改 code/kern/process/proc.c 的 function2 区域。
+
+1. 修正 kernel_thread() 对 sstatus 的初始化。当前代码只有在 SSTATUS_SPP 已经置位时才再次置位。请基于 read_csr(sstatus) 无条件设置 SSTATUS_SPP 和 SSTATUS_SPIE，并清除 SSTATUS_SIE，确保首次 sret 返回 S 模式。
+2. 对照 get_pid()、调度器和 code/tools/test_lab4.c，核对 proc_init() 是否应将 idleproc 插入 proc_list。说明源码依据，再决定是否修改。
+3. 完成后列出实际改动。若无法读取 Git diff，请如实说明。编译和 QEMU 由我执行。
+```
 
 ##### 第二次迭代
 
-**遇到的问题：**
-1. 仅看 C 语言接口，无法确定新线程首次运行时，函数地址和参数应放在哪些寄存器里。
+Codex 将 `kernel_thread()` 中的条件置位改为 `tf.status |= SSTATUS_SPP;`，同时保留 `SPIE` 置位和 `SIE` 清零。复核 `get_pid()`、调度器和 `test_lab4.c` 后，Codex 保留了 `idleproc` 在 `proc_list` 中的登记，PID 哈希表中仍未登记 `idleproc`。
 
-2. 审查 set_proc_name() 时发现，它会从传入地址固定复制 PROC_NAME_LEN 个字节。直接传入 "idle" 或 "init" 会读出字符串字面量的边界。
+修正后，我在 WSL 中再次执行 `git diff --check` 和 `make -B -C code obj/kern/process/proc.o`。前者无输出，后者强制重编译通过。第二轮实现用于正式提交 `40e9808`。本轮先完成单文件编译，整机结果在小组合并后验证。
 
-**问题解决策略：**
-1. 在 [RELY] 中补充 entry.S、trapentry.S 和 trap.h。根据 move a0, s1 和 jalr s0，在 kernel_thread() 中将函数地址存入 s0、参数存入 s1。在 copy_thread() 中把 Trap 帧复制到新线程的内核栈，并将切换上下文的返回地址设为 forkret。
+**最终结果**
 
-2. 在 [SPECIFICATION] 中明确线程名称按实际字符串长度复制，并包含结尾的 \0。在 proc_init() 中分别使用 sizeof("idle") 和 sizeof("init") 作为复制长度。
+经过 2 次 Codex 迭代，完成了 `alloc_proc()`、`kernel_thread()`、`copy_thread()`、`copy_mm()`、`do_fork()` 和 `proc_init()`。第二轮将 `SSTATUS_SPP` 改为无条件置位，修正版用于正式提交 `40e9808`。
 
-##### 第三次迭代
+在 WSL 中执行 `git diff --check`，未发现补丁格式问题。执行 `make -B -C code obj/kern/process/proc.o`，强制重编译通过。小组合并后的 QEMU 与课程评分结果见第五节。
 
-**遇到的问题：**
-1. 执行 make -C code 时，编译在 kern/trap/trap.c 处中止。trap() 调用 interrupt_handler() 和 exception_handler() 时，编译器在调用处看不到这两个函数的声明。整机构建尚未编译到 proc.c。
+**合并验证**
 
-**问题解决策略：**
-1. 在提示词中补充验证步骤。整机构建受其他模块阻塞时，先通过项目 Makefile 单独构建 B 模块，再用 -B 强制重新编译，确认结果来自本次构建。实际执行了 make -B -C code obj/kern/process/proc.o，编译通过。
-
-
-**最终结果：**
-
-经过 [3] 次迭代，该模块最终：
-- ✅ 完成 alloc_proc()、kernel_thread()、copy_thread()、copy_mm()、do_fork() 和 proc_init() 的实现。
-- ✅ git diff --check 检查通过，proc.c 单独编译及强制重新编译均通过。
-- ✅ 代码已推送至 lab4-wangruiyu 分支，提交号为 058c72e。
-- ⏳ initproc 首次运行、资源分配失败后的清理以及整机评分仍待实测。
-
-**关键改进点总结（如有）：**
-1. 在 [RELY] 中补充实际的源码标记、数据结构和汇编入口，明确 C 代码与汇编之间的寄存器约定。
-2. 在 [SPECIFICATION] 中明确 Trap 帧的位置、线程名称的复制长度，以及 do_fork() 在不同失败阶段需要释放的资源。
-3. 通过 Makefile 单独验证 proc.o，并将首次运行和失败清理保留为后续的运行验收项。
-
+原样合入 `40e9808` 时，`idleproc` 位于 `proc_list` 中，调度器扫描到它会提前选中，`make grade` 的调度项未通过，总分为 20/30。这只是一个小的约定问题，我们在 `proc_init()` 中删去 `list_add(&proc_list, &idleproc->list_link);`，由原有调度逻辑在没有普通就绪线程时回退到 `idleproc`。改后复测时，`make qemu` 成功运行 `initproc`，`make grade` 三项均通过，总分为 30/30。
 
 ### 功能模块三：进程调度
 
@@ -213,6 +364,9 @@ setup_kstack、put_kstack、get_pid、hash_proc、wakeup_proc 和中断保存/�
 首次运行还需要此前迁移的 Trap 恢复代码。`forkrets` 把 `sp` 指向新线程的 trapframe，`RESTORE_ALL` 恢复寄存器和 CSR，最后由 `sret` 跳到 `kernel_thread_entry`。
 
 Lab 3 的时钟处理中保留重设下一次事件、累加 `ticks` 和每 100 ticks 输出，移除了当时我自己加入的**累计 300 ticks 主动关机**的规则。
+
+#### Spec 与提示词设计
+详细的设计依据及思路见prompt.md。
 
 #### 最终提示词
 
@@ -319,21 +473,9 @@ Lab 3 的时钟处理中保留重设下一次事件、累加 `ticks` 和每 100 
 
 ![AI 按 Spec 实现调度模块的记录](./images/lab4-schedule-ai-generation.png)
 
-### 练习：[练习标题]
-
-**负责人：** [学号-姓名]
-
-[按照练习的具体要求进行解答]
-
 ---
 
-### Challenge：[Challenge标题]
-
-**负责人：** [学号-姓名]
-
-[按照Challenge的具体要求进行解答]
-
-### Challenge：本地中断的保存与恢复
+### Challenge 1：本地中断的保存与恢复
 
 **负责人：** 2411333-吴卓彦
 
@@ -366,22 +508,66 @@ flowchart TD
 
 这样，当前线程、页表和寄存器现场的交接可以在本地关中断期间完成。该机制保护当前 hart 的临界区。多核共享数据还需要相应的同步机制。
 
+### Challenge 2：深入理解不同分页模式的工作原理（思考题）
+
+**负责人：** 2413497-姚嘉乐
+
+#### 题目
+
+1. 结合 Sv32、Sv39、Sv48 的异同，解释 `get_pte()` 中的两段代码为什么相像。
+2. `get_pte()` 把页表项查找和页表页分配放在同一个函数里。这种写法是否合适，有没有必要把两个功能拆开？
+
+#### 解答
+
+**1. 两段代码的作用**
+
+Lab4 使用 Sv39。`get_pte()` 的第一段用 `PDX1(la)` 选出根页表项，从该项找到中间页表。第二段用 `PDX0(la)` 选出中间页表项，再从该项找到末级页表。两段跨越的是不同层级，但执行的是同一种操作：检查当前项的 `PTE_V` 位。如果下一级页表缺失且允许创建，就分配并清零一页，再把新页的物理页号写入当前项。到达末级页表后，`get_pte()` 用 `PTX(la)` 选中目标项并返回它的地址。
+
+三种模式都把虚拟地址拆成各级索引和页内偏移。查找 4 KiB 页时，最低 12 位都是页内偏移，每级索引用来选择当前页表中的一项。
+
+| 分页模式 | 各级索引位数 | 页表层数 | 查找 4 KiB 页时向下走的次数 |
+| --- | --- | ---: | ---: |
+| Sv32 | 10 + 10 | 2 | 1 |
+| Sv39 | 9 + 9 + 9 | 3 | 2 |
+| Sv48 | 9 + 9 + 9 + 9 | 4 | 3 |
+
+每多一级页表，就要再执行一次查找下级页表的操作。按 Lab4 的写法，Sv32 只需写一段这样的检查，Sv39 需要写两段，Sv48 则需要写三段。两段代码相像，正是因为它们重复了同一个逐级查找步骤。
+
+**2. 查找与分配是否需要拆开**
+
+我认为本实验保留现有写法即可。查找和按需分配走同一条页表路径，`create` 决定缺少下级页表时如何处理。`page_remove()` 传入 `0`，缺表时直接返回。`page_insert()` 传入 `1`，遇到缺表才尝试分配。两个调用方因此可以共用一套遍历代码。
+
+如果后续需要区分缺表和内存不足，或要求分配失败时撤销本次已挂接的页表等操作，可以提供「只查找」和「查找或创建」两个接口，内部仍共用遍历代码。
+
 ---
 
 ## 五、测试与验证
 
-<!-- 根据该实验的具体情况，提供完整的测试运行截图，应包含：
-- 编译及运行成功的输出（make qemu），可能有多个
-- 测试通过的结果（make grade），只有一个
--->
+合并三个模块并修正 `idleproc` 的登记方式后，我们在 WSL 的 `code` 目录执行了 `make qemu` 和 `make grade`。普通启动完成了内存自检，`initproc` 成功运行。课程评分的三项测试全部通过，总分为 **30/30**。 下图沿用首次整合的截图，修正后的复测结果一致。
 
-**测试截图：**
+### 普通启动与内核线程运行
 
+![执行 make qemu 后的编译输出](./images/lab4-qemu-build.png)
 
+![链接器清理未使用的段并生成内核镜像](./images/lab4-qemu-linker.png)
 
-**功能模块三的整机验证计划（2411333-吴卓彦）**
+前两张图记录了内核的编译与链接过程。编译时，`kmalloc.c` 把整数形式的地址传给了接收 `void *` 的 `kva2page()`，因此出现类型转换警告。我们查阅了对应源码和构建选项，确认该警告未中断本次编译。`removing unused section` 是链接器按构建选项移除未使用段时打印的信息。链接完成后，`objcopy` 生成了内核镜像 `bin/ucore.img`。
 
-待各模块合并后统一运行 `make qemu` 和 `make grade`。普通启动时核对 `initproc` 的名称、PID 和问候输出。评分时核对 `[Test Schedule] PASS`，该用例要求两个测试线程都实际运行。实测输出和截图在联调完成后补录。
+![OpenSBI 启动与 DTB 内存探测](./images/lab4-qemu-boot.png)
+
+![内存自检通过及 initproc 的运行输出](./images/lab4-qemu-self-checks.png)
+
+启动后，内核从设备树中读到了 128 MiB 物理内存。随后，物理页分配自检 `check_alloc_page()`、页表自检 `check_pgdir()` 和启动页表自检 `check_boot_pgdir()` 均通过。`initproc` 以 PID 1 运行，打印了 `Hello world!!` 和结束语，验证了内核线程的创建和首次切换。
+
+### 课程评分
+
+![make grade 注入测试并编译时的类型警告](./images/lab4-grade-warnings.png)
+
+`make grade` 在临时副本中注入课程测试。除上述地址转换警告外，评分代码把返回 `void` 的测试函数传给了要求返回 `int` 的 `kernel_thread()`，因此出现函数指针类型警告。这些警告来自框架和评分代码中的类型不匹配，本次编译与评分仍顺利完成。
+
+![PMM、进程创建和调度三项测试均通过，总分 30/30](./images/lab4-grade-result.png)
+
+评分输出中，`check PMM`、`check Process Create` 和 `check Schedule` 均为 `OK`，每项满分 10 分。三项结果分别验证了页映射与引用计数、内核线程创建，以及两个测试线程都能得到调度并实际运行。
 
 ---
 
@@ -389,16 +575,28 @@ flowchart TD
 
 ### 对操作系统的理解
 
+#### 实验知识点与 OS 原理的对应
+
 1. **PCB 与状态转换。** `proc_struct` 保存 PID、状态、内核栈和上下文等信息。新 PCB 从 `PROC_UNINIT` 开始，由 `wakeup_proc()` 置为 `PROC_RUNNABLE`，后续由调度器选择。
 2. **线程资源共享。** 两个内核线程可以共享内核地址空间，同时保有各自的 PCB 和栈。`idleproc` 复用启动栈，`initproc` 使用单独分配的内核栈。
 3. **切换上下文与 Trap 返回。** `context` 用于恢复内核切换所需的寄存器，`trapframe` 用于恢复 Trap 返回现场。首次运行通过预先构造这两份状态，把新线程送到指定入口。
 4. **进程标识和并发保护。** PID 分配和链表、哈希表登记在同一段本地关中断区间内完成，防止本 CPU 的中断路径在登记过程中观察到不一致状态。
 5. **调度策略与执行现场。** `schedule()` 按就绪状态和链表顺序选线程，`proc_run()` 和 `switch_to()` 完成执行权交接。实验中的测试线程主动让出 CPU，可以验证多次切出和恢复。
 6. **本地中断与原子性。** 调度过程中保存并关闭当前 hart 的中断，使当前线程、地址翻译和寄存器现场在交接过程中保持一致。
-7. **本实验未覆盖的调度机制。** 实验用链表扫描和主动重调度展示线程切换。完整的时间片抢占、优先级调度、多核运行队列和负载均衡还需要额外机制。
+7. **多级页表与物理页共享。** 分页用页表把虚拟页号转换为物理页号，页内偏移保持原值。实验中，`get_pte()` 按 Sv39 的三级索引找到末级页表项，`page_insert()` 可以让两个虚拟页指向同一个物理页。删除映射时，只有最后一份引用被撤销后，才能将数据页归还给分配器。
+8. **页表更新与 TLB 同步。** 页表保存映射和访问权限，TLB 缓存近期的地址翻译。实验在替换或删除页表项后执行 `sfence.vma`，使处理器后续访问按更新后的映射处理。撤销映射时先清除页表项并同步 TLB，再回收旧页，避免处理器继续通过旧翻译访问已归还的物理页。
+
+#### OS 原理中重要但没有对应上的知识点
+
+1. **更复杂的调度机制。** 实验用链表扫描和主动重调度展示线程切换。完整的时间片抢占、优先级调度、多核运行队列和负载均衡还需要额外机制。
+2. **按需分页和页面置换。** 缺页时如何按需调入页面、内存不足时如何选择并换出页面，这些更复杂的虚拟内存机制在本实验中还未涉及。
+3. **用户进程的地址空间隔离与系统调用。** 本实验中的线程共享启动页表，`copy_mm()` 仅保留接口。用户进程需要独立的用户地址空间，还要通过系统调用完成从用户态进入内核态、处理请求和返回用户态的过程。
+4. **进程退出与资源回收。** 本实验的 `do_exit()` 通过 `panic()` 结束演示。完整的退出流程还需要记录退出状态、通知等待的父进程，并在合适的时机回收内核栈和 PCB。
 
 ### AI 协作开发的经验
 
+给AI写提示词时，先把几种容易混淆的情况分清楚，既能够提供AI生成代码准确率，又便于我们根据这些情况来验证AI生成代码的正确性。比如，同一个虚拟地址再次指向同一个物理页，只需要更新权限。如果换成了另一页，就要减少旧页的引用，等计数归零后再回收。把这两种情况分别写进提示词后，可以通过具体的情况处理来判断代码实现是否正确。
 
+线程创建中的一些细节要结合源码确认。比如，线程函数和参数到底该放在哪个寄存器里，看 `kernel_thread_entry` 里的 `move a0, s1` 和 `jalr s0` 就清楚了。
 
 ---
