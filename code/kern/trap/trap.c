@@ -8,6 +8,7 @@
 #include <assert.h>
 #include <console.h>
 #include <vmm.h>
+#include <proc.h>
 #include <kdebug.h>
 #include <unistd.h>
 #include <syscall.h>
@@ -94,11 +95,55 @@ void print_regs(struct pushregs *gpr)
 }
 
 extern struct mm_struct *check_mm_struct;
+extern int do_pgfault(struct mm_struct *mm, uint32_t error_code, uintptr_t addr);
 
 //lab3 请补充你在lab3中的代码
+static void interrupt_handler(struct trapframe *tf)
+{
+    uintptr_t cause = tf->cause & ~((uintptr_t)1 << (REGBYTES * 8 - 1));
+    if (cause == IRQ_S_TIMER)
+    {
+        clock_set_next_event();
+        ticks++;
+        if (current != NULL)
+        {
+            current->need_resched = 1;
+        }
+    }
+}
 
 //lab5 function1 YOUR CODE update exception_handler
+void exception_handler(struct trapframe *tf)
+{
+    switch (tf->cause)
+    {
+    case CAUSE_USER_ECALL:
+        tf->epc += 4;
+        syscall();
+        return;
+    case CAUSE_FETCH_PAGE_FAULT:
+    case CAUSE_LOAD_PAGE_FAULT:
+    case CAUSE_STORE_PAGE_FAULT:
+        if (current != NULL && current->mm != NULL &&
+            do_pgfault(current->mm, (uint32_t)tf->cause, tf->tval) == 0)
+        {
+            return;
+        }
+        break;
+    }
 
+    print_trapframe(tf);
+    if (trap_in_kernel(tf))
+    {
+        panic("unhandled kernel exception");
+    }
+    if (current == NULL)
+    {
+        panic("unhandled user exception without a current process");
+    }
+    cprintf("unhandled user exception in process %d\n", current->pid);
+    do_exit(-E_KILLED);
+}
 
 static inline void trap_dispatch(struct trapframe *tf)
 {
